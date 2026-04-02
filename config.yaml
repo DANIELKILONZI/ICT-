@@ -1,0 +1,74 @@
+# ICT Multi-Timeframe Trading System Configuration
+
+system:
+  log_level: INFO
+  log_file: logs/ict_system.log
+  signal_output_path: signals/latest_signal.json
+  performance_log: logs/performance.csv
+  scan_interval_seconds: 60
+
+mt5:
+  host: "localhost"
+  port: 18812
+  login: 0              # Set your MT5 account login
+  password: ""          # Set your MT5 account password
+  server: ""            # Set your broker server name
+
+symbols:
+  - EURUSD
+  - GBPUSD
+  - USDJPY
+  - XAUUSD
+
+timeframes:
+  macro: D1
+  structure: H1
+  entry: M5
+  supported: [M1, M5, M15, H1, H4, D1]
+
+data:
+  source: mt5           # mt5 | csv
+  csv_path: data/csv/
+  sqlite_path: data/ict_data.db
+  candle_history: 500   # candles to fetch per timeframe
+
+strategy:
+  atr_period: 14
+  atr_multiplier: 1.5   # displacement threshold multiplier
+  swing_lookback: 2     # candles each side for swing detection
+  equal_level_pips: 3   # pip threshold for equal highs/lows
+  fib_swing_lookback: 50
+
+risk:
+  risk_percent: 1.0           # % account risk per trade
+  max_daily_loss_percent: 3.0
+  max_trades_per_day: 5
+  max_spread_pips: 3.0
+  max_slippage_pips: 2.0
+  trading_hours:              # UTC hours
+    london_open: 8
+    london_close: 17
+    ny_open: 13
+    ny_close: 22
+
+signal:
+  min_confidence: 0.65        # minimum confidence score to emit signal
+  min_risk_reward: 2.0
+
+ml:
+  enabled: false
+  model_path: ml/models/xgb_filter.pkl
+  confidence_threshold: 0.65
+
+integration:
+  mode: file            # file | http | socket
+  http_host: "0.0.0.0"
+  http_port: 5000
+  socket_host: "0.0.0.0"
+  socket_port: 9999
+  signal_ttl_seconds: 300     # signal expires after N seconds
+
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""

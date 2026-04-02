@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Data and logs (runtime files)
+logs/*.log
+logs/*.csv
+signals/latest_signal.json
+data/ict_data.db
+data/csv/*.csv
+
+# ML models
+ml/models/*.pkl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
