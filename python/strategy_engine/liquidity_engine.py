@@ -15,15 +15,15 @@ from typing import Optional
 
 import pandas as pd
 
-from python.config import STRATEGY
+from python.config import STRATEGY, pip_size_for
 from python.strategy_engine.market_structure import SwingPoint
 
 _EQUAL_PIPS = STRATEGY.get("equal_level_pips", 3)
 
 
 def _pips_to_price(pips: float, symbol: str = "EURUSD") -> float:
-    """Convert pip count to price distance (default 5-digit broker)."""
-    return pips * 0.00010
+    """Convert pip count to price distance using the symbol-aware pip size."""
+    return pips * pip_size_for(symbol)
 
 
 @dataclass

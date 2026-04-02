@@ -9,6 +9,22 @@
 #include <Trade\SymbolInfo.mqh>
 
 //+------------------------------------------------------------------+
+//| Symbol-aware pip size                                            |
+//|                                                                  |
+//| For all standard instruments, one pip = SYMBOL_POINT * 10:      |
+//|   5-digit forex (EURUSD): point=0.00001 → pip=0.0001            |
+//|   3-digit JPY  (USDJPY):  point=0.001   → pip=0.01              |
+//|   2-digit gold (XAUUSD):  point=0.01    → pip=0.10              |
+//| This function encapsulates that rule so callers never hard-code  |
+//| a literal multiplier.                                            |
+//+------------------------------------------------------------------+
+double SymbolPipSize(string symbol)
+{
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   return point * 10.0;
+}
+
+//+------------------------------------------------------------------+
 //| Trade signal structure                                           |
 //+------------------------------------------------------------------+
 struct STradeSignal
@@ -173,7 +189,7 @@ public:
    {
       long   spreadPts = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
       double point     = SymbolInfoDouble(symbol, SYMBOL_POINT);
-      double pipSize   = point * 10;  // 5-digit broker
+      double pipSize   = SymbolPipSize(symbol);
       double spreadPips = spreadPts * point / pipSize;
       return spreadPips <= m_maxSpread;
    }
@@ -188,12 +204,13 @@ public:
       double tickValue     = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize      = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
       double contractSize  = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+      double pipSize       = SymbolPipSize(symbol);
 
       double slDistance = MathAbs(entryPrice - stopLoss);
       if(slDistance <= 0 || tickSize <= 0 || tickValue <= 0) return 0;
 
-      double slPips     = slDistance / point / 10.0;
-      double pipValue   = tickValue / tickSize * point * 10.0;
+      double slPips     = slDistance / pipSize;
+      double pipValue   = tickValue / tickSize * pipSize;
       double lot        = riskAmt / (slPips * pipValue);
 
       double minLot  = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);

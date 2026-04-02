@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from python.config import PERF_LOG, TELEGRAM
+from python.config import PERF_LOG, TELEGRAM, pip_size_for
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def update_trade_result(
                 try:
                     ep = float(row["entry_price"])
                     sl = float(row["stop_loss"])
-                    pip_size = 0.0001
+                    pip_size = pip_size_for(symbol)
 
                     if direction == "BUY":
                         pnl_pips = (exit_price - ep) / pip_size

@@ -38,6 +38,27 @@ strategy:
   swing_lookback: 2     # candles each side for swing detection
   equal_level_pips: 3   # pip threshold for equal highs/lows
   fib_swing_lookback: 50
+  ob_search_window: 10  # max candles to search backward from displacement for OB candle
+  disp_search_window: 6 # max candles to search backward from BOS for displacement candle
+
+# Confluence scoring weights – tune against backtests without changing code
+scoring:
+  bias_alignment: 0.20      # D1 + H1 trend alignment bonus
+  correct_zone: 0.15        # price is in the correct Fib zone (discount/premium)
+  wrong_zone_penalty: 0.30  # deduction when price is in the wrong Fib zone
+  h1_ob: 0.20               # active H1 order block present
+  h1_fvg: 0.15              # active H1 fair-value gap present
+  m5_sweep: 0.20            # recent M5 liquidity sweep confirmed
+  m5_fvg: 0.10              # active M5 fair-value gap present
+  min_valid_score: 0.50     # minimum score required to mark a setup as valid
+
+# Symbol-aware pip sizes: keys are substrings matched against the symbol name.
+# The first matching key wins; "default" is the fallback.
+pip_sizes:
+  default: 0.0001   # standard 5-digit forex (EURUSD, GBPUSD, …)
+  JPY: 0.01         # 3-digit JPY pairs (USDJPY, EURJPY, …)
+  XAU: 0.10         # gold (XAUUSD)
+  XAG: 0.01         # silver (XAGUSD)
 
 risk:
   risk_percent: 1.0           # % account risk per trade

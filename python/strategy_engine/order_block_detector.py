@@ -58,6 +58,8 @@ def detect_order_blocks(
     """
     period = atr_period or STRATEGY.get("atr_period", 14)
     mult = atr_multiplier or STRATEGY.get("atr_multiplier", 1.5)
+    ob_window   = STRATEGY.get("ob_search_window",   10)  # candles back from displacement to find OB
+    disp_window = STRATEGY.get("disp_search_window",  6)  # candles back from BOS to find displacement
 
     atr_series = _atr(df, period).to_numpy()
     opens = df["open"].to_numpy()
@@ -73,10 +75,13 @@ def detect_order_blocks(
         if bos_idx < 2:
             continue
 
-        # Look back from BOS candle for the displacement candle
-        # The displacement is the candle just before the BOS (or the BOS candle itself)
-        # We search up to 5 candles back for the displacement
-        for disp_idx in range(bos_idx, max(bos_idx - 6, 0), -1):
+        # ── Step 1: find the displacement candle ────────────────────────────
+        # Per ICT theory the OB is defined relative to the displacement move
+        # that *caused* the BOS, not relative to the BOS candle itself.
+        # We search backward from the BOS candle to locate the displacement:
+        # the most recent candle whose body exceeds ATR × multiplier and whose
+        # close is in the direction of the BOS.
+        for disp_idx in range(bos_idx, max(bos_idx - disp_window, 0), -1):
             candle_range = abs(closes[disp_idx] - opens[disp_idx])
             atr_val = atr_series[disp_idx]
             if np.isnan(atr_val) or atr_val == 0:
@@ -86,11 +91,14 @@ def detect_order_blocks(
 
             # Found a valid displacement candle
             if event.direction == "BULLISH":
-                # Displacement must be bullish
+                # Displacement must be a bullish candle
                 if closes[disp_idx] <= opens[disp_idx]:
                     continue
-                # Search for last bearish candle before displacement
-                for ob_idx in range(disp_idx - 1, max(disp_idx - 10, -1), -1):
+                # ── Step 2: find the OB ─────────────────────────────────────
+                # The OB is the LAST (most recent) bearish candle immediately
+                # before the displacement move – i.e. we walk backward from
+                # disp_idx-1 and stop at the first opposing candle we find.
+                for ob_idx in range(disp_idx - 1, max(disp_idx - ob_window, -1), -1):
                     if ob_idx < 0:
                         break
                     if closes[ob_idx] < opens[ob_idx]:  # bearish candle
@@ -110,11 +118,13 @@ def detect_order_blocks(
                 break
 
             elif event.direction == "BEARISH":
-                # Displacement must be bearish
+                # Displacement must be a bearish candle
                 if closes[disp_idx] >= opens[disp_idx]:
                     continue
-                # Search for last bullish candle before displacement
-                for ob_idx in range(disp_idx - 1, max(disp_idx - 10, -1), -1):
+                # ── Step 2: find the OB ─────────────────────────────────────
+                # The OB is the LAST (most recent) bullish candle immediately
+                # before the displacement move.
+                for ob_idx in range(disp_idx - 1, max(disp_idx - ob_window, -1), -1):
                     if ob_idx < 0:
                         break
                     if closes[ob_idx] > opens[ob_idx]:  # bullish candle

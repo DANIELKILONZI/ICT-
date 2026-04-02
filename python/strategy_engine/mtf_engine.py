@@ -21,7 +21,7 @@ from typing import Optional
 
 import pandas as pd
 
-from python.config import STRATEGY
+from python.config import SCORING, STRATEGY
 from python.strategy_engine import (
     bos_detector,
     fvg_detector,
@@ -35,6 +35,15 @@ from python.strategy_engine.market_structure import TrendDirection
 logger = logging.getLogger(__name__)
 
 _FIB_LOOKBACK = STRATEGY.get("fib_swing_lookback", 50)
+
+_SC_BIAS        = SCORING.get("bias_alignment",    0.20)
+_SC_ZONE_OK     = SCORING.get("correct_zone",      0.15)
+_SC_ZONE_WRONG  = SCORING.get("wrong_zone_penalty", 0.30)
+_SC_H1_OB       = SCORING.get("h1_ob",             0.20)
+_SC_H1_FVG      = SCORING.get("h1_fvg",            0.15)
+_SC_M5_SWEEP    = SCORING.get("m5_sweep",          0.20)
+_SC_M5_FVG      = SCORING.get("m5_fvg",            0.10)
+_SC_MIN_VALID   = SCORING.get("min_valid_score",   0.50)
 
 
 @dataclass
@@ -115,11 +124,11 @@ def analyse(
 
     if d1_trend == TrendDirection.BULLISH and h1_bos_dir == "BULLISH":
         signal_dir = "BUY"
-        score += 0.2
+        score += _SC_BIAS
         reasons.append("D1 bullish + H1 bullish BOS")
     elif d1_trend == TrendDirection.BEARISH and h1_bos_dir == "BEARISH":
         signal_dir = "SELL"
-        score += 0.2
+        score += _SC_BIAS
         reasons.append("D1 bearish + H1 bearish BOS")
     else:
         return MTFAnalysis(
@@ -156,23 +165,23 @@ def analyse(
             if (signal_dir == "BUY" and pzone == "DISCOUNT") or (
                 signal_dir == "SELL" and pzone == "PREMIUM"
             ):
-                score += 0.15
+                score += _SC_ZONE_OK
                 reasons.append(f"Price in {pzone} zone")
             else:
-                # Wrong zone – reduce score heavily
-                score -= 0.3
+                # Wrong zone – reduce score
+                score -= _SC_ZONE_WRONG
                 reasons.append(f"Price in {pzone} zone (wrong for {signal_dir})")
 
     # ── H1 Order Block ────────────────────────────────────────────────────
     h1_ob = order_block_detector.nearest_ob(h1["obs"], current_price, signal_dir)
     if h1_ob:
-        score += 0.2
+        score += _SC_H1_OB
         reasons.append(f"H1 OB at {h1_ob.ob_low:.5f}-{h1_ob.ob_high:.5f}")
 
     # ── H1 FVG ────────────────────────────────────────────────────────────
     h1_fvg = fvg_detector.nearest_fvg(h1["fvg"], current_price, signal_dir)
     if h1_fvg:
-        score += 0.15
+        score += _SC_H1_FVG
         reasons.append(f"H1 FVG at {h1_fvg.gap_low:.5f}-{h1_fvg.gap_high:.5f}")
 
     # ── M5 liquidity sweep ────────────────────────────────────────────────
@@ -181,13 +190,13 @@ def analyse(
     if m5_sweep:
         # Only count recent sweeps (last 10 candles on M5)
         if (len(df_m5) - 1 - m5_sweep.index) <= 10:
-            score += 0.2
+            score += _SC_M5_SWEEP
             reasons.append("M5 liquidity sweep confirmed")
 
     # ── M5 FVG ────────────────────────────────────────────────────────────
     m5_fvg = fvg_detector.nearest_fvg(m5["fvg"], current_price, signal_dir)
     if m5_fvg:
-        score += 0.1
+        score += _SC_M5_FVG
         reasons.append(f"M5 FVG at {m5_fvg.gap_low:.5f}-{m5_fvg.gap_high:.5f}")
 
     # ── Entry / SL / TP calculation ───────────────────────────────────────
@@ -223,7 +232,7 @@ def analyse(
 
     # ── Validity gate ─────────────────────────────────────────────────────
     valid = (
-        score >= 0.5
+        score >= _SC_MIN_VALID
         and entry_price is not None
         and stop_loss is not None
         and take_profit is not None
