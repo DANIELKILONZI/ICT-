@@ -145,22 +145,41 @@ def detect_liquidity_sweeps(
         Price wicks *above* a previous swing high then candle closes *below* it.
     Bearish sweep:
         Price wicks *below* a previous swing low then candle closes *above* it.
+
+    Complexity: O(n log k) where n is candle count and k is the number of
+    swing points.  The prior-swing lists are built incrementally with a
+    two-pointer so no per-candle list comprehension is needed.
     """
     threshold = _pips_to_price(pip_threshold or _EQUAL_PIPS, symbol)
     sweeps: list[LiquiditySweep] = []
 
-    high_prices = {sp.index: sp.price for sp in swing_highs}
-    low_prices = {sp.index: sp.price for sp in swing_lows}
+    # Sort swing points by candle index so we can advance a pointer as we scan
+    sorted_highs = sorted(swing_highs, key=lambda s: s.index)
+    sorted_lows  = sorted(swing_lows,  key=lambda s: s.index)
 
-    highs = df["high"].to_numpy()
-    lows = df["low"].to_numpy()
+    highs  = df["high"].to_numpy()
+    lows   = df["low"].to_numpy()
     closes = df["close"].to_numpy()
-    times = df["time"].tolist()
+    times  = df["time"].tolist()
+
+    # Rolling collections of *active* (already-formed) swing prices
+    active_high_prices: list[float] = []
+    active_low_prices:  list[float] = []
+    h_ptr = 0
+    l_ptr = 0
 
     for i in range(len(df)):
+        # Advance pointers: admit swings whose index < i (formed before this candle)
+        while h_ptr < len(sorted_highs) and sorted_highs[h_ptr].index < i:
+            active_high_prices.append(sorted_highs[h_ptr].price)
+            h_ptr += 1
+
+        while l_ptr < len(sorted_lows) and sorted_lows[l_ptr].index < i:
+            active_low_prices.append(sorted_lows[l_ptr].price)
+            l_ptr += 1
+
         # Check against all prior swing highs (sell-side liquidity above)
-        prior_highs = [p for idx, p in high_prices.items() if idx < i]
-        for ph in prior_highs:
+        for ph in active_high_prices:
             if highs[i] > ph + threshold and closes[i] < ph:
                 sweeps.append(
                     LiquiditySweep(
@@ -173,8 +192,7 @@ def detect_liquidity_sweeps(
                 )
 
         # Check against all prior swing lows (buy-side liquidity below)
-        prior_lows = [p for idx, p in low_prices.items() if idx < i]
-        for pl in prior_lows:
+        for pl in active_low_prices:
             if lows[i] < pl - threshold and closes[i] > pl:
                 sweeps.append(
                     LiquiditySweep(

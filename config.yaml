@@ -85,6 +85,7 @@ integration:
   mode: file            # file | http | socket
   http_host: "0.0.0.0"
   http_port: 5000
+  http_workers: 2       # Gunicorn worker processes
   socket_host: "0.0.0.0"
   socket_port: 9999
   signal_ttl_seconds: 300     # signal expires after N seconds

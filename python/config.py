@@ -93,6 +93,7 @@ _DEFAULTS: dict[str, Any] = {
         "mode": "file",
         "http_host": "0.0.0.0",
         "http_port": 5000,
+        "http_workers": 2,
         "socket_host": "0.0.0.0",
         "socket_port": 9999,
         "signal_ttl_seconds": 300,
@@ -110,10 +111,6 @@ _DEFAULTS: dict[str, Any] = {
         "XAG": 0.01,
     },
 }
-
-
-class ConfigurationError(RuntimeError):
-    """Raised when a required configuration key is absent and has no default."""
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

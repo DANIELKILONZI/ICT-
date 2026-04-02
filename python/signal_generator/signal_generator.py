@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -123,9 +124,33 @@ def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
     return signal
 
 
+def _sanitize_signal(signal: dict) -> dict:
+    """
+    Sanitize all string values in *signal* so they are safe for the MQL5
+    simple regex-based JSON parser.
+
+    The MQL5 parser (``ExtractJsonString``) finds the first ``"`` after a key
+    name and reads until the next ``"``.  It cannot handle:
+      - escaped double-quotes  (``\"``)  inside a value
+      - backslashes            (``\\``)  inside a value
+      - bare control characters (CR, LF, TAB)
+
+    We strip those characters from string fields.  Numeric and boolean fields
+    are not affected.  The ``reasons`` list (not parsed by MQL5) is left as-is.
+    """
+    _unsafe = re.compile(r'["\\\r\n\t]')
+    sanitized = {}
+    for k, v in signal.items():
+        if isinstance(v, str):
+            sanitized[k] = _unsafe.sub("", v)
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 def save_signal(signal: dict) -> None:
     """Persist the latest signal to the configured JSON file."""
-    SIGNAL_OUTPUT_PATH.write_text(json.dumps(signal, indent=2))
+    SIGNAL_OUTPUT_PATH.write_text(json.dumps(_sanitize_signal(signal), indent=2))
     logger.debug("Signal saved to %s", SIGNAL_OUTPUT_PATH)
 
 
