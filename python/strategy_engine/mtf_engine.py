@@ -207,7 +207,6 @@ def analyse(
             candidates.append(m5_fvg.gap_low)
         entry_price = min(candidates, key=lambda p: abs(p - current_price)) if candidates else current_price
         stop_loss = entry_price - 2 * atr_m5
-        min_rr = STRATEGY.get("fib_swing_lookback", 2)   # reuse field not ideal, use default
         take_profit = entry_price + (entry_price - stop_loss) * 2.0  # 2:1 RR
 
     elif signal_dir == "SELL":

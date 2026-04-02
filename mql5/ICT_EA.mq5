@@ -181,10 +181,19 @@ bool GenerateBacktestSignal(STradeSignal &signal)
    int    maPeriod  = 50;
    int    atrPeriod = 14;
 
-   double ma   = iMA(_Symbol, PERIOD_H1, maPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   double atr  = iATR(_Symbol, PERIOD_M5, atrPeriod);
-   double bid  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask  = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // In MQL5, iMA() and iATR() return indicator handles; use CopyBuffer() to get values
+   int    maHandle  = iMA(_Symbol, PERIOD_H1, maPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   int    atrHandle = iATR(_Symbol, PERIOD_M5, atrPeriod);
+
+   double maArr[];
+   double atrArr[];
+   if(CopyBuffer(maHandle, 0, 0, 1, maArr) <= 0) return false;
+   if(CopyBuffer(atrHandle, 0, 0, 1, atrArr) <= 0) return false;
+
+   double ma  = maArr[0];
+   double atr = atrArr[0];
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
    if(ma == 0 || atr == 0) return false;
 
@@ -196,8 +205,11 @@ bool GenerateBacktestSignal(STradeSignal &signal)
 
    // Simple bias: price above MA → BUY setup; below → SELL setup
    // Require a 1-ATR retracement from the recent extreme
-   double high5 = iHigh(_Symbol, PERIOD_M5, iHighest(_Symbol, PERIOD_M5, MODE_HIGH, 10, 1));
-   double low5  = iLow(_Symbol,  PERIOD_M5, iLowest(_Symbol,  PERIOD_M5, MODE_LOW,  10, 1));
+   // iHighest/iLowest return the bar index; use that index with iHigh/iLow
+   int    highIdx = iHighest(_Symbol, PERIOD_M5, MODE_HIGH, 10, 1);
+   int    lowIdx  = iLowest(_Symbol,  PERIOD_M5, MODE_LOW,  10, 1);
+   double high5   = iHigh(_Symbol, PERIOD_M5, highIdx);
+   double low5    = iLow(_Symbol,  PERIOD_M5, lowIdx);
 
    if(bid > ma && bid < high5 - 0.5 * atr)
    {

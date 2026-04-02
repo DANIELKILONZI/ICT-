@@ -64,8 +64,16 @@ def refresh(symbol: str, timeframe: str, count: int = 500) -> pd.DataFrame:
     return get_ohlcv(symbol, timeframe, count, use_cache=False)
 
 
+def _validate_identifier(name: str) -> str:
+    """Ensure the string contains only alphanumeric characters and underscores."""
+    import re
+    if not re.match(r"^[A-Z0-9_]+$", name):
+        raise ValueError(f"Invalid identifier for SQL table name: {name!r}")
+    return name
+
+
 def _table_name(symbol: str, timeframe: str) -> str:
-    return f"{symbol.upper()}_{timeframe.upper()}"
+    return _validate_identifier(f"{symbol.upper()}_{timeframe.upper()}")
 
 
 def _persist_to_sqlite(df: pd.DataFrame, symbol: str, timeframe: str) -> None:

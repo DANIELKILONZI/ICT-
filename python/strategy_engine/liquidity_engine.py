@@ -99,30 +99,35 @@ def detect_stop_hunts(
     threshold = _pips_to_price(pip_threshold or _EQUAL_PIPS, symbol)
     hunts = []
 
-    for i, row in df.iterrows():
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
+    times = df["time"].tolist()
+
+    for i in range(len(df)):
         for level in levels:
             if level.kind == "EQUAL_HIGH":
                 # Wick above level, close below
-                if row["high"] > level.price + threshold and row["close"] < level.price:
+                if highs[i] > level.price + threshold and closes[i] < level.price:
                     hunts.append(
                         {
-                            "index": int(i),
-                            "time": row["time"],
+                            "index": i,
+                            "time": times[i],
                             "direction": "BEARISH_HUNT",
                             "level_price": level.price,
-                            "close": row["close"],
+                            "close": closes[i],
                         }
                     )
             elif level.kind == "EQUAL_LOW":
                 # Wick below level, close above
-                if row["low"] < level.price - threshold and row["close"] > level.price:
+                if lows[i] < level.price - threshold and closes[i] > level.price:
                     hunts.append(
                         {
-                            "index": int(i),
-                            "time": row["time"],
+                            "index": i,
+                            "time": times[i],
                             "direction": "BULLISH_HUNT",
                             "level_price": level.price,
-                            "close": row["close"],
+                            "close": closes[i],
                         }
                     )
     return hunts
@@ -147,33 +152,37 @@ def detect_liquidity_sweeps(
     high_prices = {sp.index: sp.price for sp in swing_highs}
     low_prices = {sp.index: sp.price for sp in swing_lows}
 
-    for i, row in df.iterrows():
-        row_idx = int(i)
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
+    times = df["time"].tolist()
+
+    for i in range(len(df)):
         # Check against all prior swing highs (sell-side liquidity above)
-        prior_highs = [p for idx, p in high_prices.items() if idx < row_idx]
+        prior_highs = [p for idx, p in high_prices.items() if idx < i]
         for ph in prior_highs:
-            if row["high"] > ph + threshold and row["close"] < ph:
+            if highs[i] > ph + threshold and closes[i] < ph:
                 sweeps.append(
                     LiquiditySweep(
-                        index=row_idx,
-                        time=row["time"],
+                        index=i,
+                        time=times[i],
                         direction="BULLISH_SWEEP",
                         swept_level=ph,
-                        close_price=row["close"],
+                        close_price=closes[i],
                     )
                 )
 
         # Check against all prior swing lows (buy-side liquidity below)
-        prior_lows = [p for idx, p in low_prices.items() if idx < row_idx]
+        prior_lows = [p for idx, p in low_prices.items() if idx < i]
         for pl in prior_lows:
-            if row["low"] < pl - threshold and row["close"] > pl:
+            if lows[i] < pl - threshold and closes[i] > pl:
                 sweeps.append(
                     LiquiditySweep(
-                        index=row_idx,
-                        time=row["time"],
+                        index=i,
+                        time=times[i],
                         direction="BEARISH_SWEEP",
                         swept_level=pl,
-                        close_price=row["close"],
+                        close_price=closes[i],
                     )
                 )
 
