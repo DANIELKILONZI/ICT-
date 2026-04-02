@@ -40,6 +40,9 @@ strategy:
   fib_swing_lookback: 50
   ob_search_window: 10  # max candles to search backward from displacement for OB candle
   disp_search_window: 6 # max candles to search backward from BOS for displacement candle
+  london_killzone_open: 7    # UTC hour – London Killzone opens (Setup 3)
+  london_killzone_close: 10  # UTC hour – London Killzone closes (Setup 3)
+  killzone_bos_lookback: 3   # H1 BOS must be within this many candles for Setup 3
 
 # Confluence scoring weights – tune against backtests without changing code
 scoring:

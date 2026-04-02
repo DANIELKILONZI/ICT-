@@ -56,6 +56,9 @@ _DEFAULTS: dict[str, Any] = {
         "fib_swing_lookback": 50,
         "ob_search_window": 10,
         "disp_search_window": 6,
+        "london_killzone_open": 7,    # UTC hour – London Killzone open
+        "london_killzone_close": 10,  # UTC hour – London Killzone close
+        "killzone_bos_lookback": 3,   # H1 BOS must be within this many candles
     },
     "scoring": {
         "bias_alignment": 0.20,

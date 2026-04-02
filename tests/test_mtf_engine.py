@@ -61,6 +61,7 @@ def _make_analysis(**kwargs) -> MTFAnalysis:
         take_profit=1.12000,
         confluence_score=0.75,
         valid=True,
+        setup_name=None,
         reasons=["D1 bullish + H1 bullish BOS"],
     )
     defaults.update(kwargs)

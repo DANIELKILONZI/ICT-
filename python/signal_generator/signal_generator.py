@@ -40,7 +40,10 @@ _RISK_PERCENT = RISK.get("risk_percent", 1.0)
 
 
 def _setup_type(analysis: MTFAnalysis) -> str:
-    """Determine the ICT setup label from active components."""
+    """Return the ICT setup label, preferring the named playbook when available."""
+    if analysis.setup_name:
+        return f"ICT_{analysis.setup_name}"
+    # Fallback: derive from active components (backward compatibility)
     parts = []
     if analysis.h1_fvg:
         parts.append("FVG")
