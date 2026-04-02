@@ -15,16 +15,12 @@ import numpy as np
 import pandas as pd
 
 from python.config import STRATEGY
+from python.strategy_engine.util import atr as _atr_series
 
 
 def _atr(df: pd.DataFrame, period: int) -> pd.Series:
-    high = df["high"]
-    low = df["low"]
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    return tr.rolling(period).mean()
+    """Thin wrapper kept for backward compatibility; delegates to util.atr."""
+    return _atr_series(df, period)
 
 
 @dataclass

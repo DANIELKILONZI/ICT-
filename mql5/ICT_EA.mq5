@@ -64,6 +64,41 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+//| Trade transaction event handler                                  |
+//|                                                                  |
+//| Called by MetaTrader 5 on every trade event.  We use this to    |
+//| detect when a position opened by this EA is closed so that the  |
+//| trade logger's win/loss counters stay accurate.                  |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(
+   const MqlTradeTransaction &trans,
+   const MqlTradeRequest     &request,
+   const MqlTradeResult      &result)
+{
+   // We only care about a deal being added (position closed)
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD)
+      return;
+
+   // Select the deal to inspect its properties
+   if(!HistoryDealSelect(trans.deal))
+      return;
+
+   // Filter to deals belonging to our EA (magic number) and to the
+   // position-close entry (OUT or IN_OUT)
+   long  dealMagic  = (long)HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+   long  dealEntry  = (long)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+
+   if(dealMagic != InpMagicNumber)
+      return;
+
+   if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT)
+      return;
+
+   double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+   g_logger.OnTradeClose(profit);
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()

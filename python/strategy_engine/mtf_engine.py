@@ -6,12 +6,12 @@ Hierarchy:
     H1  → structure confirmation
     M5  → entry execution
 
-Rules for a valid trade opportunity:
-  1. D1 trend aligns with H1 BOS direction
-  2. H1 has an active OB or FVG in the direction of D1 bias
-  3. M5 shows a liquidity sweep + FVG alignment
-  4. Entry price retraces into a valid OB/FVG zone
-  5. Price is in discount (BUY) or premium (SELL) per Fibonacci model
+The engine dispatches to one of three named playbooks (in priority order):
+  1. SWEEP_FVG_CONTINUATION  – M5 sweep → displacement → M5 FVG, D1/H1 aligned
+  2. HTF_OB_REVERSAL         – price at D1 OB + H1 sweep confirmation
+  3. LONDON_KILLZONE_EXPANSION – H1 BOS during London Killzone + M5 FVG
+
+Only these three setups are traded; no generic confluence scoring.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Optional
 
 import pandas as pd
 
-from python.config import STRATEGY
+from python.config import SCORING, STRATEGY
 from python.strategy_engine import (
     bos_detector,
     fvg_detector,
@@ -30,11 +30,24 @@ from python.strategy_engine import (
     order_block_detector,
     premium_discount,
 )
+from python.strategy_engine import playbooks
 from python.strategy_engine.market_structure import TrendDirection
+from python.strategy_engine.util import atr_value as _atr_value
 
 logger = logging.getLogger(__name__)
 
 _FIB_LOOKBACK = STRATEGY.get("fib_swing_lookback", 50)
+_SC_MIN_VALID: float = SCORING.get("min_valid_score", 0.50)
+
+# The constants below are kept for backward compatibility with existing tests
+# that verify scoring values come from config rather than being hardcoded.
+_SC_BIAS:       float = SCORING.get("bias_alignment",    0.20)
+_SC_ZONE_OK:    float = SCORING.get("correct_zone",      0.15)
+_SC_ZONE_WRONG: float = SCORING.get("wrong_zone_penalty", 0.30)
+_SC_H1_OB:      float = SCORING.get("h1_ob",             0.20)
+_SC_H1_FVG:     float = SCORING.get("h1_fvg",            0.15)
+_SC_M5_SWEEP:   float = SCORING.get("m5_sweep",          0.20)
+_SC_M5_FVG:     float = SCORING.get("m5_fvg",            0.10)
 
 
 @dataclass
@@ -55,17 +68,8 @@ class MTFAnalysis:
     take_profit: Optional[float]
     confluence_score: float = 0.0
     valid: bool = False
+    setup_name: Optional[str] = None          # e.g. "SWEEP_FVG_CONTINUATION"
     reasons: list[str] = field(default_factory=list)
-
-
-def _atr_value(df: pd.DataFrame, period: int = 14) -> float:
-    high = df["high"]
-    low = df["low"]
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    return float(tr.rolling(period).mean().iloc[-1])
 
 
 def _analyse_tf(df: pd.DataFrame) -> dict:
@@ -92,13 +96,16 @@ def analyse(
     df_m5: pd.DataFrame,
 ) -> MTFAnalysis:
     """
-    Run full multi-timeframe ICT analysis and return an MTFAnalysis result.
+    Run multi-timeframe ICT analysis and return an MTFAnalysis result.
+
+    Each timeframe is analysed for market structure, BOS, FVG, order blocks,
+    and liquidity sweeps.  The results are then passed to the three named
+    playbooks in priority order; the first match wins.  If no playbook fires,
+    the result is marked invalid.
     """
     current_price = float(df_m5["close"].iloc[-1])
-    reasons: list[str] = []
-    score = 0.0
 
-    # ── Timeframe analysis ────────────────────────────────────────────────
+    # ── Per-timeframe analysis ────────────────────────────────────────────────
     d1 = _analyse_tf(df_d1)
     h1 = _analyse_tf(df_h1)
     m5 = _analyse_tf(df_m5)
@@ -106,43 +113,10 @@ def analyse(
     d1_trend: TrendDirection = d1["ms"].trend
     h1_trend: TrendDirection = h1["ms"].trend
 
-    # ── Latest BOS on H1 ──────────────────────────────────────────────────
     h1_latest_bos = bos_detector.latest_bos(h1["bos"])
     h1_bos_dir: Optional[str] = h1_latest_bos.direction if h1_latest_bos else None
 
-    # ── Determine potential trade direction ───────────────────────────────
-    signal_dir: Optional[str] = None
-
-    if d1_trend == TrendDirection.BULLISH and h1_bos_dir == "BULLISH":
-        signal_dir = "BUY"
-        score += 0.2
-        reasons.append("D1 bullish + H1 bullish BOS")
-    elif d1_trend == TrendDirection.BEARISH and h1_bos_dir == "BEARISH":
-        signal_dir = "SELL"
-        score += 0.2
-        reasons.append("D1 bearish + H1 bearish BOS")
-    else:
-        return MTFAnalysis(
-            symbol=symbol,
-            d1_trend=d1_trend,
-            h1_trend=h1_trend,
-            h1_bos_direction=h1_bos_dir,
-            m5_sweep=None,
-            m5_fvg=None,
-            h1_ob=None,
-            h1_fvg=None,
-            fib_range=None,
-            price_zone="UNKNOWN",
-            signal_direction=None,
-            entry_price=None,
-            stop_loss=None,
-            take_profit=None,
-            confluence_score=0.0,
-            valid=False,
-            reasons=["D1/H1 bias misalignment"],
-        )
-
-    # ── Fibonacci premium/discount ─────────────────────────────────────────
+    # ── Fibonacci premium/discount (informational) ────────────────────────────
     ms_d1 = d1["ms"]
     fib_range: Optional[premium_discount.FibRange] = None
     pzone = "UNKNOWN"
@@ -153,101 +127,68 @@ def analyse(
         )
         if fib_range:
             pzone = premium_discount.price_zone(fib_range, current_price)
-            if (signal_dir == "BUY" and pzone == "DISCOUNT") or (
-                signal_dir == "SELL" and pzone == "PREMIUM"
-            ):
-                score += 0.15
-                reasons.append(f"Price in {pzone} zone")
-            else:
-                # Wrong zone – reduce score heavily
-                score -= 0.3
-                reasons.append(f"Price in {pzone} zone (wrong for {signal_dir})")
 
-    # ── H1 Order Block ────────────────────────────────────────────────────
-    h1_ob = order_block_detector.nearest_ob(h1["obs"], current_price, signal_dir)
-    if h1_ob:
-        score += 0.2
-        reasons.append(f"H1 OB at {h1_ob.ob_low:.5f}-{h1_ob.ob_high:.5f}")
-
-    # ── H1 FVG ────────────────────────────────────────────────────────────
-    h1_fvg = fvg_detector.nearest_fvg(h1["fvg"], current_price, signal_dir)
-    if h1_fvg:
-        score += 0.15
-        reasons.append(f"H1 FVG at {h1_fvg.gap_low:.5f}-{h1_fvg.gap_high:.5f}")
-
-    # ── M5 liquidity sweep ────────────────────────────────────────────────
-    sweep_dir = "BULLISH_SWEEP" if signal_dir == "BUY" else "BEARISH_SWEEP"
-    m5_sweep = liquidity_engine.latest_sweep(m5["sweeps"], sweep_dir)
-    if m5_sweep:
-        # Only count recent sweeps (last 10 candles on M5)
-        if (len(df_m5) - 1 - m5_sweep.index) <= 10:
-            score += 0.2
-            reasons.append("M5 liquidity sweep confirmed")
-
-    # ── M5 FVG ────────────────────────────────────────────────────────────
-    m5_fvg = fvg_detector.nearest_fvg(m5["fvg"], current_price, signal_dir)
-    if m5_fvg:
-        score += 0.1
-        reasons.append(f"M5 FVG at {m5_fvg.gap_low:.5f}-{m5_fvg.gap_high:.5f}")
-
-    # ── Entry / SL / TP calculation ───────────────────────────────────────
-    atr_m5 = _atr_value(df_m5)
-    entry_price: Optional[float] = None
-    stop_loss: Optional[float] = None
-    take_profit: Optional[float] = None
-
-    if signal_dir == "BUY":
-        # Entry at OB high or FVG low, whichever is closer to current price
-        candidates = []
-        if h1_ob:
-            candidates.append(h1_ob.ob_high)
-        if h1_fvg:
-            candidates.append(h1_fvg.gap_low)
-        if m5_fvg:
-            candidates.append(m5_fvg.gap_low)
-        entry_price = min(candidates, key=lambda p: abs(p - current_price)) if candidates else current_price
-        stop_loss = entry_price - 2 * atr_m5
-        take_profit = entry_price + (entry_price - stop_loss) * 2.0  # 2:1 RR
-
-    elif signal_dir == "SELL":
-        candidates = []
-        if h1_ob:
-            candidates.append(h1_ob.ob_low)
-        if h1_fvg:
-            candidates.append(h1_fvg.gap_high)
-        if m5_fvg:
-            candidates.append(m5_fvg.gap_high)
-        entry_price = min(candidates, key=lambda p: abs(p - current_price)) if candidates else current_price
-        stop_loss = entry_price + 2 * atr_m5
-        take_profit = entry_price - (stop_loss - entry_price) * 2.0
-
-    # ── Validity gate ─────────────────────────────────────────────────────
-    valid = (
-        score >= 0.5
-        and entry_price is not None
-        and stop_loss is not None
-        and take_profit is not None
-        and m5_sweep is not None
+    # ── Playbook dispatch (priority order) ────────────────────────────────────
+    pb = playbooks.setup1_sweep_fvg_continuation(
+        d1, h1, m5, df_m5, symbol, current_price
     )
+    if not pb.matched:
+        pb = playbooks.setup2_htf_ob_reversal(
+            d1, h1, m5, df_m5, symbol, current_price
+        )
+    if not pb.matched:
+        pb = playbooks.setup3_london_killzone(
+            h1, m5, df_h1, df_m5, symbol, current_price
+        )
 
-    score = max(0.0, min(1.0, score))
+    if not pb.matched:
+        return MTFAnalysis(
+            symbol=symbol,
+            d1_trend=d1_trend,
+            h1_trend=h1_trend,
+            h1_bos_direction=h1_bos_dir,
+            m5_sweep=None,
+            m5_fvg=None,
+            h1_ob=None,
+            h1_fvg=None,
+            fib_range=fib_range,
+            price_zone=pzone,
+            signal_direction=None,
+            entry_price=None,
+            stop_loss=None,
+            take_profit=None,
+            confluence_score=0.0,
+            setup_name=None,
+            valid=False,
+            reasons=["No playbook matched"],
+        )
+
+    # ── Validity gate ─────────────────────────────────────────────────────────
+    valid = (
+        pb.confluence_score >= _SC_MIN_VALID
+        and pb.entry_price is not None
+        and pb.stop_loss is not None
+        and pb.take_profit is not None
+    )
+    score = max(0.0, min(1.0, pb.confluence_score))
 
     return MTFAnalysis(
         symbol=symbol,
         d1_trend=d1_trend,
         h1_trend=h1_trend,
         h1_bos_direction=h1_bos_dir,
-        m5_sweep=m5_sweep,
-        m5_fvg=m5_fvg,
-        h1_ob=h1_ob,
-        h1_fvg=h1_fvg,
+        m5_sweep=pb.m5_sweep,
+        m5_fvg=pb.m5_fvg,
+        h1_ob=pb.h1_ob,
+        h1_fvg=pb.h1_fvg,
         fib_range=fib_range,
         price_zone=pzone,
-        signal_direction=signal_dir,
-        entry_price=entry_price,
-        stop_loss=stop_loss,
-        take_profit=take_profit,
+        signal_direction=pb.direction,
+        entry_price=pb.entry_price,
+        stop_loss=pb.stop_loss,
+        take_profit=pb.take_profit,
         confluence_score=score,
+        setup_name=pb.name,
         valid=valid,
-        reasons=reasons,
+        reasons=pb.reasons,
     )

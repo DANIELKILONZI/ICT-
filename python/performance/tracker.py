@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import csv
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from python.config import PERF_LOG, TELEGRAM
+from python.config import PERF_LOG, TELEGRAM, pip_size_for
 
 logger = logging.getLogger(__name__)
+
+_csv_lock = threading.Lock()
 
 _HEADERS = [
     "timestamp",
@@ -42,12 +45,13 @@ def _ensure_file() -> None:
 
 def log_signal(signal: dict) -> None:
     """Append a generated signal to the performance CSV."""
-    _ensure_file()
-    row = {h: signal.get(h, "") for h in _HEADERS}
-    row["timestamp"] = signal.get("timestamp", datetime.now(timezone.utc).isoformat())
-    row["result"] = "OPEN"
-    with open(PERF_LOG, "a", newline="") as f:
-        csv.DictWriter(f, fieldnames=_HEADERS).writerow(row)
+    with _csv_lock:
+        _ensure_file()
+        row = {h: signal.get(h, "") for h in _HEADERS}
+        row["timestamp"] = signal.get("timestamp", datetime.now(timezone.utc).isoformat())
+        row["result"] = "OPEN"
+        with open(PERF_LOG, "a", newline="") as f:
+            csv.DictWriter(f, fieldnames=_HEADERS).writerow(row)
     logger.debug("Signal logged to performance CSV.")
 
 
@@ -63,43 +67,45 @@ def update_trade_result(
     """
     _ensure_file()
     rows: list[dict] = []
-    with open(PERF_LOG, "r", newline="") as f:
-        rows = list(csv.DictReader(f))
+    with _csv_lock:
+        with open(PERF_LOG, "r", newline="") as f:
+            rows = list(csv.DictReader(f))
 
-    updated = False
-    for row in reversed(rows):
-        if row["symbol"] == symbol and row["result"] == "OPEN":
-            try:
-                ep = float(row["entry_price"])
-                sl = float(row["stop_loss"])
-                pip_size = 0.0001
+        updated = False
+        for row in reversed(rows):
+            if row["symbol"] == symbol and row["result"] == "OPEN":
+                try:
+                    ep = float(row["entry_price"])
+                    sl = float(row["stop_loss"])
+                    pip_size = pip_size_for(symbol)
 
-                if direction == "BUY":
-                    pnl_pips = (exit_price - ep) / pip_size
-                else:
-                    pnl_pips = (ep - exit_price) / pip_size
+                    if direction == "BUY":
+                        pnl_pips = (exit_price - ep) / pip_size
+                    else:
+                        pnl_pips = (ep - exit_price) / pip_size
 
-                row["exit_price"] = str(round(exit_price, 5))
-                row["pnl_pips"] = str(round(pnl_pips, 1))
-                row["result"] = "WIN" if pnl_pips > 0 else "LOSS"
-            except (ValueError, ZeroDivisionError):
-                pass
-            updated = True
-            break
+                    row["exit_price"] = str(round(exit_price, 5))
+                    row["pnl_pips"] = str(round(pnl_pips, 1))
+                    row["result"] = "WIN" if pnl_pips > 0 else "LOSS"
+                except (ValueError, ZeroDivisionError):
+                    pass
+                updated = True
+                break
 
-    if updated:
-        with open(PERF_LOG, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=_HEADERS)
-            writer.writeheader()
-            writer.writerows(rows)
-        logger.info("Trade result updated for %s", symbol)
+        if updated:
+            with open(PERF_LOG, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=_HEADERS)
+                writer.writeheader()
+                writer.writerows(rows)
+            logger.info("Trade result updated for %s", symbol)
 
 
 def statistics() -> dict:
     """Compute win rate, expectancy, and max drawdown from the log."""
-    _ensure_file()
-    with open(PERF_LOG, "r", newline="") as f:
-        rows = list(csv.DictReader(f))
+    with _csv_lock:
+        _ensure_file()
+        with open(PERF_LOG, "r", newline="") as f:
+            rows = list(csv.DictReader(f))
 
     closed = [r for r in rows if r["result"] in ("WIN", "LOSS")]
     if not closed:
