@@ -27,12 +27,15 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from python.config import SIGNAL_CFG, SIGNAL_OUTPUT_PATH, RISK
+from python.config import pip_size_for
+from python.exceptions import SignalValidationError
 from python.strategy_engine.mtf_engine import MTFAnalysis
 
 logger = logging.getLogger(__name__)
 
 _MIN_CONFIDENCE = SIGNAL_CFG.get("min_confidence", 0.65)
 _MIN_RR = SIGNAL_CFG.get("min_risk_reward", 2.0)
+_SPREAD_PIPS = SIGNAL_CFG.get("spread_pips", 1.0)
 _RISK_PERCENT = RISK.get("risk_percent", 1.0)
 
 
@@ -54,6 +57,45 @@ def _risk_reward(entry: float, sl: float, tp: float) -> float:
     risk = abs(entry - sl)
     reward = abs(tp - entry)
     return reward / risk if risk > 0 else 0.0
+
+
+def _spread_adjusted_rr(
+    entry: float,
+    sl: float,
+    tp: float,
+    direction: str,
+    symbol: str,
+    spread_pips: float,
+) -> tuple[float, float, float, float]:
+    """
+    Return (adj_entry, adj_sl, adj_tp, adj_rr) after accounting for spread cost.
+
+    For a BUY trade the broker fills at *Ask = mid + half-spread*, so the
+    effective entry is higher by one spread.  The SL is also widened by one
+    spread because a stop is triggered at the *Bid*.  TP is unaffected in
+    price terms but the effective reward is reduced by the spread paid at
+    entry.
+
+    For a SELL trade the effective entry is lower by one spread (filled at
+    Bid), the SL is widened by one spread (triggered at Ask), and again the
+    reward is reduced by the spread.
+
+    We use the full spread (not half) as a conservative worst-case.
+    """
+    pip = pip_size_for(symbol)
+    spread_price = spread_pips * pip
+
+    if direction == "BUY":
+        adj_entry = entry + spread_price   # filled at ask
+        adj_sl    = sl    - spread_price   # SL triggered at bid → distance widens
+        adj_tp    = tp                     # TP filled at bid (no change needed for distance calc)
+    else:  # SELL
+        adj_entry = entry - spread_price   # filled at bid
+        adj_sl    = sl    + spread_price   # SL triggered at ask → distance widens
+        adj_tp    = tp
+
+    adj_rr = _risk_reward(adj_entry, adj_sl, adj_tp)
+    return adj_entry, adj_sl, adj_tp, adj_rr
 
 
 def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
@@ -86,10 +128,22 @@ def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
         logger.debug("Signal rejected for %s – missing price levels", analysis.symbol)
         return None
 
-    rr = _risk_reward(entry, sl, tp)
-    if rr < _MIN_RR:
+    # Compute spread-adjusted R:R.  The unadjusted R:R is stored for reference
+    # while the adjusted figure is used for the minimum threshold check.
+    raw_rr = _risk_reward(entry, sl, tp)
+    adj_entry, adj_sl, adj_tp, adj_rr = _spread_adjusted_rr(
+        entry, sl, tp,
+        direction=analysis.signal_direction or "",
+        symbol=analysis.symbol,
+        spread_pips=_SPREAD_PIPS,
+    )
+
+    if adj_rr < _MIN_RR:
         logger.debug(
-            "Signal rejected for %s – R:R %.2f < %.2f", analysis.symbol, rr, _MIN_RR
+            "Signal rejected for %s – spread-adjusted R:R %.2f < %.2f",
+            analysis.symbol,
+            adj_rr,
+            _MIN_RR,
         )
         return None
 
@@ -97,10 +151,12 @@ def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
         "symbol": analysis.symbol,
         "direction": analysis.signal_direction,
         "entry_type": "LIMIT",
-        "entry_price": round(entry, 5),
-        "stop_loss": round(sl, 5),
-        "take_profit": round(tp, 5),
-        "risk_reward": round(rr, 2),
+        "entry_price": round(adj_entry, 5),
+        "stop_loss": round(adj_sl, 5),
+        "take_profit": round(adj_tp, 5),
+        "risk_reward": round(adj_rr, 2),
+        "risk_reward_raw": round(raw_rr, 2),
+        "spread_pips": _SPREAD_PIPS,
         "risk_percent": _RISK_PERCENT,
         "timeframe_alignment": "D1-H1-M5",
         "setup_type": _setup_type(analysis),
@@ -113,12 +169,13 @@ def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
     }
 
     logger.info(
-        "Signal generated: %s %s @ %.5f  SL=%.5f  TP=%.5f  conf=%.2f",
+        "Signal generated: %s %s @ %.5f  SL=%.5f  TP=%.5f  adjRR=%.2f  conf=%.2f",
         signal["symbol"],
         signal["direction"],
         signal["entry_price"],
         signal["stop_loss"],
         signal["take_profit"],
+        signal["risk_reward"],
         signal["confidence_score"],
     )
     return signal
@@ -149,7 +206,21 @@ def _sanitize_signal(signal: dict) -> dict:
 
 
 def save_signal(signal: dict) -> None:
-    """Persist the latest signal to the configured JSON file."""
+    """
+    Persist the latest signal to the configured JSON file.
+
+    Raises
+    ------
+    SignalValidationError
+        When *signal* is missing a required field.
+    """
+    required = {"symbol", "direction", "entry_price", "stop_loss", "take_profit"}
+    for field in required:
+        if field not in signal:
+            raise SignalValidationError(
+                f"Signal is missing required field {field!r} before save.",
+                field=field,
+            )
     SIGNAL_OUTPUT_PATH.write_text(json.dumps(_sanitize_signal(signal), indent=2))
     logger.debug("Signal saved to %s", SIGNAL_OUTPUT_PATH)
 

@@ -49,8 +49,10 @@ def _make_analysis(**overrides) -> MTFAnalysis:
         price_zone="DISCOUNT",
         signal_direction="BUY",
         entry_price=1.10000,
-        stop_loss=1.09000,   # 100 pip risk
-        take_profit=1.12000, # 200 pip reward → 2:1 RR
+        stop_loss=1.09000,    # 100 pip risk
+        take_profit=1.12200,  # 220 pip reward → 2.2:1 raw RR;
+                              # spread-adjusted (1 pip BUY): adj_entry=1.10010, adj_sl=1.08990
+                              # adj_rr = (1.122 - 1.10010) / (1.10010 - 1.08990) ≈ 2.18 > 2.0
         confluence_score=0.80,
         valid=True,
         reasons=["D1 bullish + H1 bullish BOS"],

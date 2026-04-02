@@ -31,6 +31,7 @@ from python.strategy_engine import (
     premium_discount,
 )
 from python.strategy_engine.market_structure import TrendDirection
+from python.strategy_engine.util import atr_value as _atr_value
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +66,6 @@ class MTFAnalysis:
     confluence_score: float = 0.0
     valid: bool = False
     reasons: list[str] = field(default_factory=list)
-
-
-def _atr_value(df: pd.DataFrame, period: int = 14) -> float:
-    high = df["high"]
-    low = df["low"]
-    prev_close = df["close"].shift(1)
-    tr = pd.concat(
-        [high - low, (high - prev_close).abs(), (low - prev_close).abs()], axis=1
-    ).max(axis=1)
-    return float(tr.rolling(period).mean().iloc[-1])
 
 
 def _analyse_tf(df: pd.DataFrame) -> dict:

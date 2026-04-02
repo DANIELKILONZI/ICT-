@@ -83,6 +83,7 @@ _DEFAULTS: dict[str, Any] = {
     "signal": {
         "min_confidence": 0.65,
         "min_risk_reward": 2.0,
+        "spread_pips": 1.0,
     },
     "ml": {
         "enabled": False,

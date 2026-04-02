@@ -2,16 +2,25 @@
 Data Engine – MT5 Connector
 Fetches OHLC data via the MetaTrader5 Python package.
 Falls back gracefully when MT5 is not available (e.g., on Linux without Wine/MT5).
+
+Connection pooling
+------------------
+A single MT5 connection is maintained for the lifetime of the process.
+``_ensure_mt5()`` only (re-)initialises the terminal when no healthy
+connection exists; a lightweight health check (``account_info()``) is used
+to detect a stale connection before retrying once.
 """
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
 
 from python.config import CONFIG
+from python.exceptions import DataSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +43,50 @@ except ImportError:
     _MT5_AVAILABLE = False
     logger.warning("MetaTrader5 package not found – MT5 data source unavailable.")
 
+# ---------------------------------------------------------------------------
+# Persistent connection state
+# ---------------------------------------------------------------------------
+_conn_lock = threading.Lock()
+_connected: bool = False       # True once mt5.initialize() has succeeded
+
 
 def _ensure_mt5() -> bool:
+    """
+    Ensure a healthy MT5 connection exists.
+
+    On first call (or after a detected disconnect) this calls
+    ``mt5.initialize()``.  On subsequent calls it performs a cheap
+    ``mt5.account_info()`` health-check and re-initialises only when the
+    check fails, so the vast majority of calls return quickly without
+    touching the MT5 IPC layer.
+    """
+    global _connected
+
     if not _MT5_AVAILABLE:
         return False
-    cfg = CONFIG.get("mt5", {})
-    if not mt5.initialize(
-        login=cfg.get("login", 0),
-        password=cfg.get("password", ""),
-        server=cfg.get("server", ""),
-    ):
-        logger.error("MT5 initialize() failed: %s", mt5.last_error())
-        return False
-    return True
+
+    with _conn_lock:
+        if _connected:
+            # Fast health-check – account_info() returns None on a dead connection
+            if mt5.account_info() is not None:
+                return True
+            # Connection is stale; fall through to re-initialise
+            logger.warning("MT5 connection lost – reconnecting.")
+            _connected = False
+
+        cfg = CONFIG.get("mt5", {})
+        ok = mt5.initialize(
+            login=cfg.get("login", 0),
+            password=cfg.get("password", ""),
+            server=cfg.get("server", ""),
+        )
+        if not ok:
+            logger.error("MT5 initialize() failed: %s", mt5.last_error())
+            return False
+
+        _connected = True
+        logger.debug("MT5 connection established.")
+        return True
 
 
 def fetch_ohlcv(
@@ -60,10 +100,21 @@ def fetch_ohlcv(
 
     Returns a DataFrame with columns: time, open, high, low, close, volume
     Index is reset integer.  Returns empty DataFrame on failure.
+
+    Raises
+    ------
+    DataSourceError
+        When the MT5 terminal is not available (package not installed or
+        terminal not running).  When the timeframe is unrecognised a plain
+        ``ValueError`` is raised so the caller can surface a meaningful message.
     """
     if not _ensure_mt5():
-        logger.error("MT5 not connected – cannot fetch %s %s.", symbol, timeframe)
-        return pd.DataFrame()
+        raise DataSourceError(
+            "MT5 not connected – cannot fetch data.",
+            symbol=symbol,
+            timeframe=timeframe,
+            source="mt5",
+        )
 
     tf_const = _TF_MAP.get(timeframe.upper())
     if tf_const is None:
@@ -120,5 +171,8 @@ def get_symbol_info(symbol: str) -> dict:
 
 
 def shutdown_mt5() -> None:
+    global _connected
     if _MT5_AVAILABLE:
-        mt5.shutdown()
+        with _conn_lock:
+            mt5.shutdown()
+            _connected = False

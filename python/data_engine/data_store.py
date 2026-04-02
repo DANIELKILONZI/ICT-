@@ -17,6 +17,7 @@ import pandas as pd
 from python.config import CONFIG
 from python.data_engine.csv_loader import load_csv
 from python.data_engine.mt5_connector import fetch_ohlcv
+from python.exceptions import DataSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,11 @@ def get_ohlcv(
             return cached
 
     if _SOURCE == "mt5":
-        df = fetch_ohlcv(symbol, timeframe, count)
+        try:
+            df = fetch_ohlcv(symbol, timeframe, count)
+        except DataSourceError as exc:
+            logger.warning("MT5 fetch failed: %s", exc)
+            df = pd.DataFrame()
     else:
         df = load_csv(symbol, timeframe, count=count)
 
