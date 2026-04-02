@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +25,7 @@ _SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # In-memory cache: { (symbol, timeframe): DataFrame }
 _cache: dict[tuple[str, str], pd.DataFrame] = {}
+_cache_lock = threading.Lock()
 
 
 def get_ohlcv(
@@ -39,8 +41,9 @@ def get_ohlcv(
     """
     key = (symbol.upper(), timeframe.upper())
 
-    if use_cache and key in _cache:
-        return _cache[key]
+    with _cache_lock:
+        if use_cache and key in _cache:
+            return _cache[key]
 
     if _SOURCE == "mt5":
         df = fetch_ohlcv(symbol, timeframe, count)
@@ -51,7 +54,8 @@ def get_ohlcv(
         df = _load_from_sqlite(symbol, timeframe, count)
 
     if not df.empty:
-        _cache[key] = df
+        with _cache_lock:
+            _cache[key] = df
         _persist_to_sqlite(df, symbol, timeframe)
 
     return df
@@ -60,7 +64,8 @@ def get_ohlcv(
 def refresh(symbol: str, timeframe: str, count: int = 500) -> pd.DataFrame:
     """Force-refresh the cache for a symbol/timeframe pair."""
     key = (symbol.upper(), timeframe.upper())
-    _cache.pop(key, None)
+    with _cache_lock:
+        _cache.pop(key, None)
     return get_ohlcv(symbol, timeframe, count, use_cache=False)
 
 

@@ -20,6 +20,7 @@ Model is trained offline on historical labelled trades and saved to disk.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -37,21 +38,28 @@ _MODEL_PATH = Path(__file__).resolve().parent.parent.parent / ML_CFG.get(
 _THRESHOLD = ML_CFG.get("confidence_threshold", 0.65)
 
 _model = None
+_model_lock = threading.Lock()
 
 
 def _load_model():
     global _model
-    if _model is not None:
-        return _model
+    with _model_lock:
+        if _model is not None:
+            return _model
+    # Load outside the lock to avoid blocking other callers during disk I/O.
+    # A duplicate load is harmless – last writer wins.
+    loaded = None
     try:
         import joblib  # type: ignore
 
-        _model = joblib.load(_MODEL_PATH)
+        loaded = joblib.load(_MODEL_PATH)
         logger.info("ML model loaded from %s", _MODEL_PATH)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not load ML model: %s", exc)
-        _model = None
-    return _model
+    with _model_lock:
+        if _model is None:
+            _model = loaded
+        return _model
 
 
 def _trend_int(t: TrendDirection) -> int:
@@ -111,13 +119,18 @@ def passes_ml_filter(
     threshold: float = None,
 ) -> bool:
     """
-    Returns True if ML model confidence is above threshold, or if model is unavailable.
+    Returns True if ML model confidence is above threshold.
+
+    If the model is unavailable the filter fails **closed** (returns False) so
+    that broken or missing model files never silently pass all signals through.
+    Set `ml.enabled: false` in config.yaml to disable ML filtering entirely.
     """
     if not ML_CFG.get("enabled", False):
         return True  # ML disabled → pass everything
     prob = ml_confidence(analysis, atr_m5, hour_utc)
     if prob < 0:
-        return True  # model unavailable → pass
+        logger.warning("ML model unavailable – signal rejected (fail-closed)")
+        return False  # model unavailable → reject signal
     thr = threshold or _THRESHOLD
     result = prob >= thr
     if not result:

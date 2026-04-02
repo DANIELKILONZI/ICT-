@@ -67,6 +67,7 @@ integration:
   socket_host: "0.0.0.0"
   socket_port: 9999
   signal_ttl_seconds: 300     # signal expires after N seconds
+  api_key: ""           # Set a non-empty secret to require X-API-Key on /signal endpoints
 
 telegram:
   enabled: false
