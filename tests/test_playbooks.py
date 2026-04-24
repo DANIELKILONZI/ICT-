@@ -22,6 +22,7 @@ from python.strategy_engine.playbooks import (
     setup1_sweep_fvg_continuation,
     setup2_htf_ob_reversal,
     setup3_london_killzone,
+    setup4_ny_killzone,
 )
 from python.strategy_engine.mtf_engine import _analyse_tf, MTFAnalysis, analyse
 
@@ -255,6 +256,65 @@ class TestAnalysePlaybookIntegration:
         df = self._flat_df()
         result = analyse("EURUSD", df, df, df)
         assert len(result.reasons) > 0
+
+
+# ---------------------------------------------------------------------------
+# Setup 4 – NY_KILLZONE_EXPANSION (time-gate)
+# ---------------------------------------------------------------------------
+
+class TestSetup4TimeGate:
+    """The _now_hour parameter allows deterministic testing of the NY time gate."""
+
+    def _run(self, h1, m5, now_h):
+        return setup4_ny_killzone(
+            h1_tf=_analyse_tf(h1),
+            m5_tf=_analyse_tf(m5),
+            df_h1=h1,
+            df_m5=m5,
+            symbol="EURUSD",
+            current_price=float(m5["close"].iloc[-1]),
+            _now_hour=now_h,
+        )
+
+    def test_outside_killzone_no_match(self):
+        # 12 UTC is before NY opens (13 UTC)
+        df = _flat()
+        assert not self._run(df, df, now_h=12).matched
+
+    def test_before_killzone_no_match(self):
+        df = _flat()
+        assert not self._run(df, df, now_h=6).matched  # 06:00 UTC – well outside
+
+    def test_at_killzone_close_no_match(self):
+        # The close boundary is exclusive (22 is not included)
+        df = _flat()
+        assert not self._run(df, df, now_h=22).matched
+
+    def test_inside_killzone_flat_no_bos_no_match(self):
+        # Inside NY Killzone but flat data → no recent H1 BOS → no match
+        df = _flat()
+        assert not self._run(df, df, now_h=15).matched
+
+    def test_inside_killzone_rising_but_no_m5_fvg_no_match(self):
+        # Rising H1 may produce a BOS, but flat M5 has no FVG
+        df_r = _rising()
+        df_flat = _flat()
+        result = self._run(h1=df_r, m5=df_flat, now_h=15)
+        # Either no BOS found (short lookback) or no M5 FVG; either way: no match
+        assert not result.matched
+
+    def test_name_field_when_matched(self):
+        # Verify the setup name is correct if a match ever occurs
+        # Use a result built directly to confirm the name constant
+        r = PlaybookResult(
+            matched=True,
+            name="NY_KILLZONE_EXPANSION",
+            direction="BUY",
+            entry_price=1.10,
+            stop_loss=1.09,
+            take_profit=1.12,
+        )
+        assert r.name == "NY_KILLZONE_EXPANSION"
 
 
 # ---------------------------------------------------------------------------

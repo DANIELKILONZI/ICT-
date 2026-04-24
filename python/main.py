@@ -23,7 +23,7 @@ import yaml
 from python.config import CONFIG, SYMBOLS, TIMEFRAMES
 from python.data_engine.data_store import get_ohlcv, refresh
 from python.ml.signal_filter import passes_ml_filter
-from python.performance.tracker import log_signal, notify_signal, statistics
+from python.performance.tracker import log_signal, notify_alert, notify_signal, statistics
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
 from python.strategy_engine.util import atr_value as _atr_value
@@ -40,6 +40,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _RUNNING = True
+
+# ── Watchdog state ────────────────────────────────────────────────────────────
+_last_cycle_time: float = 0.0
+_last_cycle_lock = threading.Lock()
+
+
+def _record_cycle() -> None:
+    """Update the heartbeat timestamp used by the watchdog."""
+    global _last_cycle_time
+    with _last_cycle_lock:
+        _last_cycle_time = time.monotonic()
+
+
+def _watchdog(scan_interval: int) -> None:
+    """
+    Background thread: log an error (and optionally Telegram-alert) if no
+    analysis cycle has completed within 2 × scan_interval_seconds.
+
+    The initial sleep of 2 × scan_interval gives the main loop time to
+    complete its first cycle before the watchdog starts checking.
+    """
+    threshold = scan_interval * 2
+    time.sleep(threshold)
+    while _RUNNING:
+        with _last_cycle_lock:
+            last = _last_cycle_time
+        if last > 0:
+            age = time.monotonic() - last
+            if age > threshold:
+                msg = (
+                    f"No analysis cycle completed in the last {age:.0f}s "
+                    f"(threshold {threshold}s). System may be stalled."
+                )
+                logger.error("WATCHDOG: %s", msg)
+                try:
+                    notify_alert(f"⚠️ WATCHDOG: {msg}")
+                except Exception:  # noqa: BLE001
+                    pass
+        time.sleep(scan_interval)
 
 
 def _shutdown(signum, frame):
@@ -86,6 +125,7 @@ def _start_integration() -> None:
 
 def run_analysis_cycle() -> None:
     """Run one full cycle of MTF ICT analysis for all symbols."""
+    _record_cycle()  # update watchdog heartbeat unconditionally
     if not _in_trading_session():
         logger.debug("Outside trading session – skipping analysis.")
         return
@@ -137,6 +177,13 @@ def main() -> None:
     _start_integration()
 
     scan_interval = CONFIG.get("system", {}).get("scan_interval_seconds", 60)
+
+    # Start watchdog before the main loop so it begins timing from the first cycle
+    watchdog_thread = threading.Thread(
+        target=_watchdog, args=(scan_interval,), daemon=True, name="watchdog"
+    )
+    watchdog_thread.start()
+    logger.debug("Watchdog thread started (threshold=%ds).", scan_interval * 2)
 
     while _RUNNING:
         run_analysis_cycle()

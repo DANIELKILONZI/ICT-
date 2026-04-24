@@ -37,6 +37,14 @@ _MIN_CONFIDENCE = SIGNAL_CFG.get("min_confidence", 0.65)
 _MIN_RR = SIGNAL_CFG.get("min_risk_reward", 2.0)
 _SPREAD_PIPS = SIGNAL_CFG.get("spread_pips", 1.0)
 _RISK_PERCENT = RISK.get("risk_percent", 1.0)
+_PER_SETUP_RISK: dict = RISK.get("per_setup_risk", {})
+
+
+def _risk_for_setup(setup_name: Optional[str]) -> float:
+    """Return per-setup risk_percent if configured, else the global default."""
+    if setup_name and setup_name in _PER_SETUP_RISK:
+        return float(_PER_SETUP_RISK[setup_name])
+    return _RISK_PERCENT
 
 
 def _setup_type(analysis: MTFAnalysis) -> str:
@@ -150,6 +158,8 @@ def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
         )
         return None
 
+    risk_pct = _risk_for_setup(analysis.setup_name)
+
     signal = {
         "symbol": analysis.symbol,
         "direction": analysis.signal_direction,
@@ -160,7 +170,7 @@ def generate_signal(analysis: MTFAnalysis) -> Optional[dict]:
         "risk_reward": round(adj_rr, 2),
         "risk_reward_raw": round(raw_rr, 2),
         "spread_pips": _SPREAD_PIPS,
-        "risk_percent": _RISK_PERCENT,
+        "risk_percent": risk_pct,
         "timeframe_alignment": "D1-H1-M5",
         "setup_type": _setup_type(analysis),
         "confidence_score": round(analysis.confluence_score, 4),

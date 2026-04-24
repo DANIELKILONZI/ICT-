@@ -77,6 +77,8 @@ risk:
     london_close: 17
     ny_open: 13
     ny_close: 22
+  per_setup_risk:             # optional per-setup overrides (setup_name → risk %)
+    NY_KILLZONE_EXPANSION: 0.5  # tighter sizing during volatile NY session
 
 signal:
   min_confidence: 0.65        # minimum confidence score to emit signal

@@ -85,6 +85,7 @@ _DEFAULTS: dict[str, Any] = {
             "ny_open": 13,
             "ny_close": 22,
         },
+        "per_setup_risk": {},  # keyed by setup_name; overrides risk_percent per setup
     },
     "signal": {
         "min_confidence": 0.65,

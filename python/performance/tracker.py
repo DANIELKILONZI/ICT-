@@ -182,3 +182,8 @@ def notify_signal(signal: dict) -> None:
         f"Setup: {signal.get('setup_type')}"
     )
     _send_telegram(msg)
+
+
+def notify_alert(message: str) -> None:
+    """Send a free-form alert string via Telegram."""
+    _send_telegram(message)
