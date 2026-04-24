@@ -123,6 +123,9 @@ def statistics() -> dict:
             pass
 
     avg_win = sum(p for p in pnls if p > 0) / max(wins, 1)
+    # When there are no losses avg_loss is 0.0 (the max(losses, 1) denominator is
+    # correct; the numerator is simply 0).  In that all-win scenario expectancy
+    # equals win_rate * avg_win, which is the correct positive result.
     avg_loss = abs(sum(p for p in pnls if p < 0)) / max(losses, 1)
     expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
 

@@ -26,6 +26,7 @@ from python.ml.signal_filter import passes_ml_filter
 from python.performance.tracker import log_signal, notify_signal, statistics
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
+from python.strategy_engine.util import atr_value as _atr_value
 
 # ── Logging setup ────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -72,9 +73,13 @@ def _start_integration() -> None:
         t = threading.Thread(target=run_server, daemon=True)
         t.start()
         logger.info("HTTP integration server started.")
+    elif mode == "socket":
+        from python.integration.socket_bridge import _get_socket
+
+        _get_socket()  # eagerly bind the socket so errors surface at startup
+        logger.info("ZeroMQ socket integration started.")
     elif mode == "file":
         logger.info("File integration mode – signals written to %s", CONFIG["system"]["signal_output_path"])
-    # Socket mode can be added here
 
 
 # ── Main analysis loop ────────────────────────────────────────────────────────
@@ -108,7 +113,8 @@ def run_analysis_cycle() -> None:
 
             # Optional ML filter
             hour_utc = datetime.now(timezone.utc).hour
-            if not passes_ml_filter(analysis, hour_utc=hour_utc):
+            atr_m5 = _atr_value(df_m5)
+            if not passes_ml_filter(analysis, atr_m5=atr_m5, hour_utc=hour_utc):
                 logger.info("%s: Signal filtered out by ML model.", symbol)
                 continue
 
@@ -117,6 +123,9 @@ def run_analysis_cycle() -> None:
                 save_signal(signal)
                 log_signal(signal)
                 notify_signal(signal)
+                if CONFIG["integration"].get("mode") == "socket":
+                    from python.integration.socket_bridge import publish_signal
+                    publish_signal(signal)
                 logger.info("✅  Signal saved for %s %s", symbol, signal["direction"])
 
         except Exception as exc:  # noqa: BLE001
@@ -137,6 +146,9 @@ def main() -> None:
     # Print final stats before exit
     stats = statistics()
     logger.info("Performance stats: %s", stats)
+    if CONFIG["integration"].get("mode") == "socket":
+        from python.integration.socket_bridge import close as _close_socket
+        _close_socket()
     logger.info("=== System stopped ===")
 
 

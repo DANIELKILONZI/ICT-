@@ -18,6 +18,7 @@ from python.strategy_engine.market_structure import TrendDirection
 from python.strategy_engine.mtf_engine import MTFAnalysis
 from python.signal_generator.signal_generator import (
     _risk_reward,
+    _spread_adjusted_rr,
     generate_signal,
     load_latest_signal,
     save_signal,
@@ -74,6 +75,103 @@ class TestRiskReward:
 
     def test_sell_rr(self):
         assert _risk_reward(1.1000, 1.1100, 1.0800) == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# _spread_adjusted_rr
+# ---------------------------------------------------------------------------
+
+class TestSpreadAdjustedRR:
+    """
+    Verify the BUY and SELL spread-adjustment logic independently.
+
+    For a BUY trade:
+      adj_entry = entry + spread_price  (filled at ask)
+      adj_sl    = sl    - spread_price  (SL at bid → distance widens)
+      adj_tp    = tp                    (unchanged)
+
+    For a SELL trade:
+      adj_entry = entry - spread_price  (filled at bid)
+      adj_sl    = sl    + spread_price  (SL at ask → distance widens)
+      adj_tp    = tp                    (unchanged)
+    """
+
+    _pip = 0.0001        # EURUSD pip size
+    _spread_pips = 1.0   # 1 pip spread
+
+    def _run(self, entry, sl, tp, direction):
+        return _spread_adjusted_rr(
+            entry, sl, tp,
+            direction=direction,
+            symbol="EURUSD",
+            spread_pips=self._spread_pips,
+        )
+
+    # ── BUY ──────────────────────────────────────────────────────────────────
+
+    def test_buy_adj_entry_higher_by_spread(self):
+        adj_entry, _, _, _ = self._run(1.1000, 1.0900, 1.1200, "BUY")
+        assert adj_entry == pytest.approx(1.1000 + self._spread_pips * self._pip)
+
+    def test_buy_adj_sl_lower_by_spread(self):
+        _, adj_sl, _, _ = self._run(1.1000, 1.0900, 1.1200, "BUY")
+        assert adj_sl == pytest.approx(1.0900 - self._spread_pips * self._pip)
+
+    def test_buy_adj_tp_unchanged(self):
+        _, _, adj_tp, _ = self._run(1.1000, 1.0900, 1.1200, "BUY")
+        assert adj_tp == pytest.approx(1.1200)
+
+    def test_buy_adj_rr_less_than_raw(self):
+        _, _, _, adj_rr = self._run(1.1000, 1.0900, 1.1200, "BUY")
+        raw_rr = _risk_reward(1.1000, 1.0900, 1.1200)
+        assert adj_rr < raw_rr
+
+    def test_buy_adj_rr_positive(self):
+        _, _, _, adj_rr = self._run(1.1000, 1.0900, 1.1200, "BUY")
+        assert adj_rr > 0.0
+
+    # ── SELL ─────────────────────────────────────────────────────────────────
+
+    def test_sell_adj_entry_lower_by_spread(self):
+        adj_entry, _, _, _ = self._run(1.1000, 1.1100, 1.0800, "SELL")
+        assert adj_entry == pytest.approx(1.1000 - self._spread_pips * self._pip)
+
+    def test_sell_adj_sl_higher_by_spread(self):
+        _, adj_sl, _, _ = self._run(1.1000, 1.1100, 1.0800, "SELL")
+        assert adj_sl == pytest.approx(1.1100 + self._spread_pips * self._pip)
+
+    def test_sell_adj_tp_unchanged(self):
+        _, _, adj_tp, _ = self._run(1.1000, 1.1100, 1.0800, "SELL")
+        assert adj_tp == pytest.approx(1.0800)
+
+    def test_sell_adj_rr_less_than_raw(self):
+        _, _, _, adj_rr = self._run(1.1000, 1.1100, 1.0800, "SELL")
+        raw_rr = _risk_reward(1.1000, 1.1100, 1.0800)
+        assert adj_rr < raw_rr
+
+    def test_sell_adj_rr_positive(self):
+        _, _, _, adj_rr = self._run(1.1000, 1.1100, 1.0800, "SELL")
+        assert adj_rr > 0.0
+
+    # ── Symmetry ─────────────────────────────────────────────────────────────
+
+    def test_buy_sell_rr_are_symmetric(self):
+        """BUY and SELL with mirror prices should produce the same adj_rr."""
+        _, _, _, buy_rr = self._run(1.1000, 1.0900, 1.1200, "BUY")
+        _, _, _, sell_rr = self._run(1.1000, 1.1100, 1.0800, "SELL")
+        assert buy_rr == pytest.approx(sell_rr, rel=1e-6)
+
+    # ── Zero-spread edge case ─────────────────────────────────────────────────
+
+    def test_zero_spread_equals_raw(self):
+        entry, sl, tp = 1.1000, 1.0900, 1.1200
+        adj_entry, adj_sl, adj_tp, adj_rr = _spread_adjusted_rr(
+            entry, sl, tp, direction="BUY", symbol="EURUSD", spread_pips=0.0
+        )
+        assert adj_entry == pytest.approx(entry)
+        assert adj_sl == pytest.approx(sl)
+        assert adj_tp == pytest.approx(tp)
+        assert adj_rr == pytest.approx(_risk_reward(entry, sl, tp))
 
 
 # ---------------------------------------------------------------------------

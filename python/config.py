@@ -59,6 +59,9 @@ _DEFAULTS: dict[str, Any] = {
         "london_killzone_open": 7,    # UTC hour – London Killzone open
         "london_killzone_close": 10,  # UTC hour – London Killzone close
         "killzone_bos_lookback": 3,   # H1 BOS must be within this many candles
+        "sweep_recency": 10,          # M5 candles; liquidity sweep must be this recent
+        "ny_killzone_open": 13,       # UTC hour – NY Killzone open
+        "ny_killzone_close": 22,      # UTC hour – NY Killzone close
     },
     "scoring": {
         "bias_alignment": 0.20,

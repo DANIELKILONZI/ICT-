@@ -153,7 +153,7 @@ def detect_order_blocks(
 def mark_mitigated_obs(obs: list[OrderBlock], df: pd.DataFrame) -> None:
     """Update *mitigated* flag in-place when price enters the OB zone."""
     for ob in obs:
-        future = df[df.index > ob.index]
+        future = df.iloc[ob.index + 1 :]
         if ob.direction == "BULLISH":
             if (future["low"] <= ob.ob_high).any():
                 ob.mitigated = True

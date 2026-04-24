@@ -14,6 +14,10 @@ Three focused setups the system is authorised to trade:
   Setup 3 – LONDON_KILLZONE_EXPANSION
       Active only during London Killzone (default 07-10 UTC).
       Recent H1 BOS establishes direction; M5 FVG gives entry.
+
+  Setup 4 – NY_KILLZONE_EXPANSION
+      Active only during New York Killzone (default 13-22 UTC).
+      Recent H1 BOS establishes direction; M5 FVG gives entry.
 """
 from __future__ import annotations
 
@@ -37,14 +41,16 @@ from python.strategy_engine.util import atr_value as _atr_value
 logger = logging.getLogger(__name__)
 
 # ── Scoring weights (shared with config where keys match) ─────────────────────
-_SC_H1_OB: float  = SCORING.get("h1_ob",  0.10)
-_SC_H1_FVG: float = SCORING.get("h1_fvg", 0.10)
+_SC_H1_OB: float  = SCORING.get("h1_ob",  0.20)
+_SC_H1_FVG: float = SCORING.get("h1_fvg", 0.15)
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-_SWEEP_RECENCY: int      = 10  # M5 candles; sweep must be this recent
+_SWEEP_RECENCY: int      = STRATEGY.get("sweep_recency", 10)  # M5 candles; sweep must be this recent
 _LKZ_OPEN: int           = STRATEGY.get("london_killzone_open",  7)
 _LKZ_CLOSE: int          = STRATEGY.get("london_killzone_close", 10)
 _KILLZONE_BOS_LOOKBACK: int = STRATEGY.get("killzone_bos_lookback", 3)
+_NYZ_OPEN: int           = STRATEGY.get("ny_killzone_open",  13)
+_NYZ_CLOSE: int          = STRATEGY.get("ny_killzone_close", 22)
 
 
 @dataclass
@@ -381,6 +387,113 @@ def setup3_london_killzone(
     return PlaybookResult(
         matched=True,
         name="LONDON_KILLZONE_EXPANSION",
+        direction=direction,
+        entry_price=entry,
+        stop_loss=sl,
+        take_profit=tp,
+        confluence_score=min(1.0, score),
+        reasons=reasons,
+        m5_sweep=m5_sweep,
+        m5_fvg=m5_fvg,
+        h1_ob=h1_ob,
+        h1_fvg=None,
+    )
+
+
+# ── Setup 4 ───────────────────────────────────────────────────────────────────
+
+def setup4_ny_killzone(
+    h1_tf: dict,
+    m5_tf: dict,
+    df_h1: pd.DataFrame,
+    df_m5: pd.DataFrame,
+    symbol: str,
+    current_price: float,
+    _now_hour: Optional[int] = None,
+) -> PlaybookResult:
+    """
+    Setup 4 – NY_KILLZONE_EXPANSION
+
+    Sequence: New York Killzone opens → H1 BOS establishes expansion direction →
+    M5 FVG (imbalance / displacement) provides the entry trigger.
+
+    Required
+    --------
+    • Current UTC hour is within [ny_killzone_open, ny_killzone_close).
+    • A recent H1 BOS (within _KILLZONE_BOS_LOOKBACK candles of the end of df_h1).
+    • An active M5 FVG in the BOS direction.
+
+    Bonuses
+    -------
+    • Recent M5 sweep in the BOS direction: +0.15
+    • Active H1 OB near current price: +0.10
+
+    Parameters
+    ----------
+    _now_hour
+        Override for the current UTC hour (for testing only). When ``None``
+        the real clock is used.
+    """
+    now_h = _now_hour if _now_hour is not None else datetime.now(timezone.utc).hour
+    if not (_NYZ_OPEN <= now_h < _NYZ_CLOSE):
+        return _no_match()
+
+    reasons: list[str] = [f"NY Killzone active ({now_h:02d}:00 UTC)"]
+    score = 0.30  # base for killzone time filter
+
+    # ── Recent H1 BOS ─────────────────────────────────────────────────────────
+    latest_h1_bos = bos_detector.latest_bos(h1_tf["bos"])
+    if latest_h1_bos is None:
+        return _no_match()
+
+    n_h1 = len(df_h1)
+    if (n_h1 - 1 - latest_h1_bos.index) > _KILLZONE_BOS_LOOKBACK:
+        return _no_match()
+
+    direction = "BUY" if latest_h1_bos.direction == "BULLISH" else "SELL"
+    fvg_dir = latest_h1_bos.direction  # "BULLISH" | "BEARISH"
+    reasons.append(f"H1 {latest_h1_bos.direction} BOS → {direction}")
+    score += 0.30
+
+    # ── M5 FVG for entry ──────────────────────────────────────────────────────
+    m5_fvg = fvg_detector.nearest_fvg(m5_tf["fvg"], current_price, fvg_dir)
+    if m5_fvg is None:
+        return _no_match()
+
+    reasons.append(f"M5 FVG imbalance {m5_fvg.gap_low:.5f}-{m5_fvg.gap_high:.5f}")
+    score += 0.20
+
+    # ── Optional bonuses ──────────────────────────────────────────────────────
+    sweep_dir = "BULLISH_SWEEP" if direction == "BUY" else "BEARISH_SWEEP"
+    n_m5 = len(df_m5)
+    m5_sweep = liquidity_engine.latest_sweep(m5_tf["sweeps"], sweep_dir)
+    if m5_sweep and (n_m5 - 1 - m5_sweep.index) <= _SWEEP_RECENCY:
+        score += 0.15
+        reasons.append("M5 sweep aligns with NY killzone expansion")
+    else:
+        m5_sweep = None
+
+    h1_ob = order_block_detector.nearest_ob(h1_tf["obs"], current_price, direction)
+    if h1_ob:
+        score += 0.10
+        reasons.append(f"H1 OB {h1_ob.ob_low:.5f}-{h1_ob.ob_high:.5f} supports entry")
+
+    # ── Entry / SL / TP ───────────────────────────────────────────────────────
+    atr = _atr_value(df_m5)
+    if atr != atr:  # NaN guard
+        return _no_match()
+
+    entry = m5_fvg.midpoint
+    if direction == "BUY":
+        sl = m5_fvg.gap_low - atr
+        tp = entry + (entry - sl) * 2.0
+    else:
+        sl = m5_fvg.gap_high + atr
+        tp = entry - (sl - entry) * 2.0
+
+    return PlaybookResult(
+        matched=True,
+        name="NY_KILLZONE_EXPANSION",
         direction=direction,
         entry_price=entry,
         stop_loss=sl,

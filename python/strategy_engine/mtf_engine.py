@@ -6,12 +6,13 @@ Hierarchy:
     H1  → structure confirmation
     M5  → entry execution
 
-The engine dispatches to one of three named playbooks (in priority order):
+The engine dispatches to one of four named playbooks (in priority order):
   1. SWEEP_FVG_CONTINUATION  – M5 sweep → displacement → M5 FVG, D1/H1 aligned
   2. HTF_OB_REVERSAL         – price at D1 OB + H1 sweep confirmation
   3. LONDON_KILLZONE_EXPANSION – H1 BOS during London Killzone + M5 FVG
+  4. NY_KILLZONE_EXPANSION    – H1 BOS during NY Killzone + M5 FVG
 
-Only these three setups are traded; no generic confluence scoring.
+Only these four setups are traded; no generic confluence scoring.
 """
 from __future__ import annotations
 
@@ -138,6 +139,10 @@ def analyse(
         )
     if not pb.matched:
         pb = playbooks.setup3_london_killzone(
+            h1, m5, df_h1, df_m5, symbol, current_price
+        )
+    if not pb.matched:
+        pb = playbooks.setup4_ny_killzone(
             h1, m5, df_h1, df_m5, symbol, current_price
         )
 

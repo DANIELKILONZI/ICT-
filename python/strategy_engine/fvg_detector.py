@@ -105,7 +105,7 @@ def mark_filled_fvg(zones: list[FVGZone], df: pd.DataFrame) -> None:
     Update the *filled* flag in-place for FVG zones where price has entered the zone.
     """
     for zone in zones:
-        future = df[df.index > zone.index]
+        future = df.iloc[zone.index + 1 :]
         if zone.direction == "BULLISH":
             if (future["low"] <= zone.gap_high).any():
                 zone.filled = True

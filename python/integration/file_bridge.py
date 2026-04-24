@@ -111,7 +111,8 @@ def poll_signal_file(
     Prefers OS-native notifications (watchdog) over polling.
     """
     try:
-        import watchdog  # noqa: F401 - check availability        _watch_with_watchdog(callback, poll_interval)
+        import watchdog  # noqa: F401 - check availability
+        _watch_with_watchdog(callback, poll_interval)
     except ImportError:
         logger.warning("watchdog not installed – falling back to polling. "
                        "Install watchdog for more efficient file monitoring.")

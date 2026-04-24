@@ -19,6 +19,7 @@ Production deployment:
 """
 from __future__ import annotations
 
+import hmac
 import logging
 from typing import Any
 
@@ -37,7 +38,7 @@ def _check_api_key() -> "tuple[Any, int] | None":
     from flask import request  # type: ignore
 
     provided = request.headers.get("X-API-Key", "")
-    if provided != _API_KEY:
+    if not hmac.compare_digest(provided, _API_KEY):
         return {"error": "unauthorized"}, 401
     return None
 
@@ -87,6 +88,10 @@ try:
         data = request.get_json(force=True)
         if not data:
             return jsonify({"error": "empty_body"}), 400
+        _REQUIRED = {"symbol", "direction", "entry_price", "stop_loss", "take_profit"}
+        missing = _REQUIRED - data.keys()
+        if missing:
+            return jsonify({"error": "missing_fields", "fields": sorted(missing)}), 400
         save_signal(data)
         logger.info("Signal received via HTTP POST: %s", data.get("symbol"))
         return jsonify({"status": "accepted"})
