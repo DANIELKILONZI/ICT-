@@ -11,6 +11,7 @@ Orchestrates:
 """
 from __future__ import annotations
 
+import json as _json
 import logging
 import signal
 import sys
@@ -24,19 +25,44 @@ from python.config import CONFIG, SYMBOLS, TIMEFRAMES
 from python.data_engine.data_store import get_ohlcv, refresh
 from python.ml.signal_filter import passes_ml_filter
 from python.performance.tracker import log_signal, notify_alert, notify_signal, statistics
-from python.performance.tracker import daily_loss_reached, has_open_trade
+from python.performance.tracker import daily_loss_reached, has_open_trade, trades_today_count
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
 from python.strategy_engine.util import atr_value as _atr_value
 
 # ── Logging setup ────────────────────────────────────────────────────────────
+
+
+class _JsonLogFormatter(logging.Formatter):
+    """Emit each log record as a single-line JSON object."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict = {
+            "time": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return _json.dumps(payload)
+
+
+_log_format = CONFIG["system"].get("log_format", "text")
+_formatter: logging.Formatter = (
+    _JsonLogFormatter()
+    if _log_format == "json"
+    else logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+)
+_log_handlers: list[logging.Handler] = [
+    logging.StreamHandler(sys.stdout),
+    logging.FileHandler(CONFIG["system"]["log_file"]),
+]
+for _h in _log_handlers:
+    _h.setFormatter(_formatter)
 logging.basicConfig(
     level=getattr(logging, CONFIG["system"].get("log_level", "INFO")),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(CONFIG["system"]["log_file"]),
-    ],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger(__name__)
 

@@ -6,6 +6,7 @@ required keys, and exposes typed convenience constants.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ _DEFAULTS: dict[str, Any] = {
         "signal_output_path": "signals/latest_signal.json",
         "performance_log": "logs/performance.csv",
         "scan_interval_seconds": 60,
+        "log_format": "text",   # "text" | "json" – use "json" for log aggregation
     },
     "mt5": {
         "host": "localhost",
@@ -144,7 +146,20 @@ def _load() -> dict[str, Any]:
             user_cfg = yaml.safe_load(fh) or {}
     else:
         user_cfg = {}
-    return _deep_merge(_DEFAULTS, user_cfg)
+    cfg = _deep_merge(_DEFAULTS, user_cfg)
+
+    # ── Environment variable overrides (for CI/CD secrets or .env files) ──────
+    # These override whatever is in config.yaml so credentials are never stored
+    # in plain text in the repository.
+    mt5_password = os.environ.get("ICT_MT5_PASSWORD")
+    if mt5_password is not None:
+        cfg["mt5"]["password"] = mt5_password
+
+    telegram_token = os.environ.get("ICT_TELEGRAM_TOKEN")
+    if telegram_token is not None:
+        cfg["telegram"]["bot_token"] = telegram_token
+
+    return cfg
 
 
 # ---------------------------------------------------------------------------

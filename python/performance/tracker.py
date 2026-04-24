@@ -57,6 +57,22 @@ def has_open_trade(symbol: str) -> bool:
     return any(r.get("symbol") == symbol and r.get("result") == "OPEN" for r in rows)
 
 
+def trades_today_count() -> int:
+    """
+    Return the number of signals logged today (UTC).
+
+    Counts every row whose timestamp starts with today's date, regardless of
+    result status.  This includes OPEN trades, so the guard fires as soon as the
+    *n*-th signal is generated, not only after it closes.
+    """
+    today: str = datetime.now(timezone.utc).date().isoformat()
+    with _csv_lock:
+        _ensure_file()
+        with open(PERF_LOG, "r", newline="") as f:
+            rows = list(csv.DictReader(f))
+    return sum(1 for r in rows if r.get("timestamp", "").startswith(today))
+
+
 def daily_loss_reached() -> bool:
     """
     Return True when today's estimated losses meet or exceed
