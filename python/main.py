@@ -153,7 +153,7 @@ def run_analysis_cycle() -> None:
 
             # Optional ML filter
             hour_utc = datetime.now(timezone.utc).hour
-            atr_m5 = _atr_value(df_m5)
+            atr_m5 = _atr_value(df_m5) if CONFIG["ml"].get("enabled") else 0.0
             if not passes_ml_filter(analysis, atr_m5=atr_m5, hour_utc=hour_utc):
                 logger.info("%s: Signal filtered out by ML model.", symbol)
                 continue
