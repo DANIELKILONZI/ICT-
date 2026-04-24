@@ -45,7 +45,7 @@ _SC_H1_OB: float  = SCORING.get("h1_ob",  0.20)
 _SC_H1_FVG: float = SCORING.get("h1_fvg", 0.15)
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-_SWEEP_RECENCY: int      = STRATEGY.get("sweep_recency", 10)  # M5 candles; liquidity sweep must be this recent
+_SWEEP_RECENCY: int      = STRATEGY.get("sweep_recency", 10)
 _LKZ_OPEN: int           = STRATEGY.get("london_killzone_open",  7)
 _LKZ_CLOSE: int          = STRATEGY.get("london_killzone_close", 10)
 _KILLZONE_BOS_LOOKBACK: int = STRATEGY.get("killzone_bos_lookback", 3)
