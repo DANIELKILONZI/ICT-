@@ -32,6 +32,16 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Verify installation without MT5
+
+Run the sample data generator to confirm NumPy/Pandas are installed correctly
+and the project is importable — no MT5 connection required:
+
+```bash
+python scripts/generate_sample_data.py
+# Should print: "wrote EURUSD_D1.csv (1825 bars)" etc.
+```
+
 ---
 
 ## 2. MetaTrader 5 on Kali Linux (via Wine)

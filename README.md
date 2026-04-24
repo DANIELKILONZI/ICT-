@@ -404,9 +404,31 @@ ml:
   confidence_threshold: 0.65
 ```
 
-To train your own model, export `logs/performance.csv` after live or demo running and label outcomes. The filter expects the same feature set as `MTFAnalysis` (confluence score, price zone, trend direction, active components).
-
 > **When `ml.enabled = false`** (default) the filter is a no-op — all valid signals pass through.
+
+### Scripts workflow (backtest → train → enable)
+
+```bash
+# 1. Generate synthetic data (or drop real MT5 CSV exports into data/csv/)
+python scripts/generate_sample_data.py
+
+# 2. Run the Setup 4 backtest to produce a labelled training dataset
+#    Optional: --sweep to grid-search killzone / BOS-lookback parameters
+python scripts/backtest_setup4.py --symbol EURUSD --output data/backtest_labels.csv
+
+# 3. Train the XGBoost filter and save it to ml/models/xgb_filter.pkl
+python scripts/train_ml.py
+
+# 4. Enable ML filtering in config.yaml
+#    ml:
+#      enabled: true
+```
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/generate_sample_data.py` | Synthetic OHLCV CSV via GBM — no MT5 required |
+| `scripts/backtest_setup4.py` | Bar-by-bar NY Killzone backtest → labelled CSV |
+| `scripts/train_ml.py` | Train XGBoost filter from labelled backtest output |
 
 ---
 
@@ -421,6 +443,15 @@ exit_price, result, pnl_pips, risk_percent, confidence_score, setup_type
 
 Call `python.performance.tracker.statistics()` programmatically to get a live summary dict (total trades, win rate, expectancy, max drawdown). Telegram alerts can be sent on every new signal by enabling the `telegram` block in `config.yaml`.
 
+### Python-side risk guards
+
+Two guards run before each signal is emitted (both are in `python/performance/tracker.py`):
+
+| Guard | Trigger | Config key |
+|-------|---------|------------|
+| **Daily loss guard** | Stops new signals when today's cumulative LOSS × `risk_percent` ≥ `max_daily_loss_percent`. Resets automatically at midnight UTC. | `risk.max_daily_loss_percent` |
+| **Duplicate signal prevention** | Skips a symbol when an `OPEN` trade for that symbol already exists in the performance log. | `risk.allow_multiple_positions_per_symbol` (default `false`) |
+
 ---
 
 ## Testing
@@ -433,7 +464,7 @@ pip install -r requirements.txt
 python -m pytest tests/ -q
 ```
 
-The suite contains **73 tests** covering market structure, BOS/FVG/OB detection, signal generation (including spread-adjusted R:R), configuration loading, the HTTP API, and data store behaviour. All tests run without a live MT5 connection using CSV fixtures and mocks.
+The suite contains **87 tests** covering market structure, BOS/FVG/OB detection, signal generation (including spread-adjusted R:R), configuration loading, the HTTP API, data store behaviour, and the new risk guards. All tests run without a live MT5 connection using CSV fixtures and mocks.
 
 ---
 

@@ -212,3 +212,122 @@ class TestStatistics:
         self._populate(tmp_path, monkeypatch, [("WIN", 50.0), ("LOSS", -100.0), ("WIN", 30.0)])
         stats = tracker_mod.statistics()
         assert stats["max_drawdown_pips"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# has_open_trade
+# ---------------------------------------------------------------------------
+
+class TestHasOpenTrade:
+    def test_returns_false_when_no_trades(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        assert tracker_mod.has_open_trade("EURUSD") is False
+
+    def test_returns_true_for_open_symbol(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        tracker_mod.log_signal(_signal(symbol="EURUSD"))
+        assert tracker_mod.has_open_trade("EURUSD") is True
+
+    def test_returns_false_for_different_symbol(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        tracker_mod.log_signal(_signal(symbol="EURUSD"))
+        assert tracker_mod.has_open_trade("GBPUSD") is False
+
+    def test_returns_false_after_trade_closed(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        tracker_mod.log_signal(_signal(symbol="EURUSD", entry=1.10000))
+        tracker_mod.update_trade_result("EURUSD", 1.10000, 1.11000, "BUY")
+        assert tracker_mod.has_open_trade("EURUSD") is False
+
+    def test_returns_true_when_one_of_two_still_open(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        tracker_mod.log_signal(_signal(symbol="EURUSD", entry=1.10000))
+        tracker_mod.log_signal(_signal(symbol="EURUSD", entry=1.10500))
+        # Close only the most recent one
+        tracker_mod.update_trade_result("EURUSD", 1.10500, 1.11500, "BUY")
+        assert tracker_mod.has_open_trade("EURUSD") is True
+
+
+# ---------------------------------------------------------------------------
+# daily_loss_reached
+# ---------------------------------------------------------------------------
+
+class TestDailyLossReached:
+    def _write_rows(self, tmp_path, monkeypatch, rows_override: list[dict]) -> None:
+        log_path = _patch_perf_log(tmp_path, monkeypatch)
+        with open(log_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=tracker_mod._HEADERS)
+            writer.writeheader()
+            writer.writerows(rows_override)
+
+    def _today_ts(self) -> str:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).isoformat()
+
+    def test_no_trades_returns_false(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        assert tracker_mod.daily_loss_reached() is False
+
+    def test_only_open_trades_returns_false(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        tracker_mod.log_signal(_signal())
+        assert tracker_mod.daily_loss_reached() is False
+
+    def test_losses_below_limit_returns_false(self, tmp_path, monkeypatch):
+        # 2 losses × 1% risk = 2% < 3% limit
+        rows = [
+            {h: "" for h in tracker_mod._HEADERS}
+            | {"symbol": "EURUSD", "result": "LOSS",
+               "risk_percent": "1.0", "pnl_pips": "-50",
+               "timestamp": self._today_ts()}
+            for _ in range(2)
+        ]
+        self._write_rows(tmp_path, monkeypatch, rows)
+        assert tracker_mod.daily_loss_reached() is False
+
+    def test_losses_at_limit_returns_true(self, tmp_path, monkeypatch):
+        # 3 losses × 1% = 3% == limit (3%)
+        rows = [
+            {h: "" for h in tracker_mod._HEADERS}
+            | {"symbol": "EURUSD", "result": "LOSS",
+               "risk_percent": "1.0", "pnl_pips": "-50",
+               "timestamp": self._today_ts()}
+            for _ in range(3)
+        ]
+        self._write_rows(tmp_path, monkeypatch, rows)
+        assert tracker_mod.daily_loss_reached() is True
+
+    def test_old_losses_are_ignored(self, tmp_path, monkeypatch):
+        # Losses from yesterday should not count
+        rows = [
+            {h: "" for h in tracker_mod._HEADERS}
+            | {"symbol": "EURUSD", "result": "LOSS",
+               "risk_percent": "1.0", "pnl_pips": "-50",
+               "timestamp": "2000-01-01T00:00:00+00:00"}
+            for _ in range(10)
+        ]
+        self._write_rows(tmp_path, monkeypatch, rows)
+        assert tracker_mod.daily_loss_reached() is False
+
+    def test_wins_do_not_reduce_loss_total(self, tmp_path, monkeypatch):
+        # 3 wins should not prevent the guard from triggering when 3 losses hit the limit
+        today = self._today_ts()
+        rows = (
+            [
+                {h: "" for h in tracker_mod._HEADERS}
+                | {"symbol": "EURUSD", "result": "WIN",
+                   "risk_percent": "1.0", "pnl_pips": "100",
+                   "timestamp": today}
+                for _ in range(3)
+            ]
+            + [
+                {h: "" for h in tracker_mod._HEADERS}
+                | {"symbol": "EURUSD", "result": "LOSS",
+                   "risk_percent": "1.0", "pnl_pips": "-50",
+                   "timestamp": today}
+                for _ in range(3)
+            ]
+        )
+        self._write_rows(tmp_path, monkeypatch, rows)
+        assert tracker_mod.daily_loss_reached() is True
+

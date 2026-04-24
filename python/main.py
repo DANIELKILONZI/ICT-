@@ -24,6 +24,7 @@ from python.config import CONFIG, SYMBOLS, TIMEFRAMES
 from python.data_engine.data_store import get_ohlcv, refresh
 from python.ml.signal_filter import passes_ml_filter
 from python.performance.tracker import log_signal, notify_alert, notify_signal, statistics
+from python.performance.tracker import daily_loss_reached, has_open_trade
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
 from python.strategy_engine.util import atr_value as _atr_value
@@ -130,13 +131,25 @@ def run_analysis_cycle() -> None:
         logger.debug("Outside trading session – skipping analysis.")
         return
 
+    # ── Daily loss guard ────────────────────────────────────────────────────
+    if daily_loss_reached():
+        logger.warning("Daily loss limit reached – no new signals will be emitted today.")
+        return
+
     tf_macro = TIMEFRAMES.get("macro", "D1")
     tf_struct = TIMEFRAMES.get("structure", "H1")
     tf_entry = TIMEFRAMES.get("entry", "M5")
     count = CONFIG["data"].get("candle_history", 500)
 
+    allow_multiple = CONFIG["risk"].get("allow_multiple_positions_per_symbol", False)
+
     for symbol in SYMBOLS:
         try:
+            # ── Duplicate signal prevention ─────────────────────────────────
+            if not allow_multiple and has_open_trade(symbol):
+                logger.debug("%s: open trade exists – skipping new signal.", symbol)
+                continue
+
             df_d1 = get_ohlcv(symbol, tf_macro, count)
             df_h1 = get_ohlcv(symbol, tf_struct, count)
             df_m5 = get_ohlcv(symbol, tf_entry, count)

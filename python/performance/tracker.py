@@ -4,6 +4,11 @@ Performance Tracking Module
 Logs all signals generated and trades executed.
 Tracks: win/loss, drawdown, expectancy, and exports CSV reports.
 Optionally sends Telegram notifications.
+
+Guards:
+  has_open_trade(symbol) → True if an OPEN row exists for the symbol.
+  daily_loss_reached()   → True when today's realised losses exceed the
+                           configured max_daily_loss_percent limit.
 """
 from __future__ import annotations
 
@@ -14,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from python.config import PERF_LOG, TELEGRAM, pip_size_for
+from python.config import PERF_LOG, RISK, TELEGRAM, pip_size_for
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,54 @@ def _ensure_file() -> None:
         with open(PERF_LOG, "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=_HEADERS)
             writer.writeheader()
+
+
+def has_open_trade(symbol: str) -> bool:
+    """Return True if there is already an OPEN trade logged for *symbol*."""
+    with _csv_lock:
+        _ensure_file()
+        with open(PERF_LOG, "r", newline="") as f:
+            rows = list(csv.DictReader(f))
+    return any(r.get("symbol") == symbol and r.get("result") == "OPEN" for r in rows)
+
+
+def daily_loss_reached() -> bool:
+    """
+    Return True when today's estimated losses meet or exceed
+    ``risk.max_daily_loss_percent`` from config.yaml.
+
+    Approximation: each closed LOSS trade is assumed to have cost
+    ``risk_percent`` of account equity (the amount that was risked on the SL).
+    Each WIN trade recovers nothing in this conservative estimate.
+    The guard resets automatically because only *today's* rows are examined.
+    """
+    limit: float = float(RISK.get("max_daily_loss_percent", 3.0))
+    today: str = datetime.now(timezone.utc).date().isoformat()
+
+    with _csv_lock:
+        _ensure_file()
+        with open(PERF_LOG, "r", newline="") as f:
+            rows = list(csv.DictReader(f))
+
+    total_loss_pct: float = 0.0
+    for r in rows:
+        if not r.get("timestamp", "").startswith(today):
+            continue
+        if r.get("result") != "LOSS":
+            continue
+        try:
+            total_loss_pct += float(r.get("risk_percent", 1.0))
+        except (ValueError, TypeError):
+            pass
+
+    if total_loss_pct >= limit:
+        logger.warning(
+            "Daily loss guard triggered: estimated %.2f%% loss today (limit %.2f%%)",
+            total_loss_pct,
+            limit,
+        )
+        return True
+    return False
 
 
 def log_signal(signal: dict) -> None:

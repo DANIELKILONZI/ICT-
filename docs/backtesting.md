@@ -48,6 +48,17 @@ Key metrics to check in the **Results** tab:
 
 ## Python Backtesting with Historical CSV
 
+### 0. (Optional) Generate synthetic data
+If you don't have real MT5 CSV exports yet, generate realistic synthetic OHLCV files
+using the built-in sample data generator:
+
+```bash
+python scripts/generate_sample_data.py
+# Writes data/csv/EURUSD_D1.csv, EURUSD_H1.csv, EURUSD_M5.csv, GBPUSD_*.csv
+```
+
+This requires no MT5 connection and is ideal for verifying your installation.
+
 ### 1. Prepare CSV data
 Place files in `data/csv/` using the naming convention:
 ```
@@ -75,6 +86,22 @@ python -m python.main
 - Signals log: `signals/latest_signal.json`
 - Performance CSV: `logs/performance.csv`
 - Detailed logs: `logs/ict_system.log`
+
+### 4. Python-side Setup 4 backtest script
+
+As an alternative to the MT5 Strategy Tester, a pure-Python bar-by-bar backtest
+is available for the NY Killzone (Setup 4) playbook:
+
+```bash
+# Single run (parameters from config.yaml)
+python scripts/backtest_setup4.py --symbol EURUSD --output data/backtest_labels.csv
+
+# Grid-search killzone hours and BOS lookback
+python scripts/backtest_setup4.py --sweep
+```
+
+The output CSV contains the ML feature columns plus a binary `label` (1=WIN, 0=LOSS)
+and can be fed directly into `scripts/train_ml.py` to produce the XGBoost filter model.
 
 ---
 
