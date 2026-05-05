@@ -25,7 +25,6 @@ _REPO = Path(__file__).resolve().parent.parent
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from scripts.generate_sample_data import generate  # noqa: E402
 from scripts.backtest_setup4 import run_backtest    # noqa: E402
 
 # ── Expected columns in every output record ───────────────────────────────────
@@ -56,17 +55,7 @@ _EXPECTED_COLUMNS = {
 _VALID_OUTCOMES = {"WIN", "LOSS", "OPEN"}
 
 
-# ── Fixture: generate CSV data once per test session ─────────────────────────
-
-@pytest.fixture(scope="module")
-def sample_csv_dir(tmp_path_factory) -> Path:
-    """Write EURUSD D1/H1/M5 CSVs to a temporary directory."""
-    csv_dir = tmp_path_factory.mktemp("sample_csv")
-    rng = np.random.default_rng(seed=42)
-    for tf in ("D1", "H1", "M5"):
-        generate("EURUSD", tf, csv_dir, rng, force=True)
-    return csv_dir
-
+# ── Fixture: use the session-scoped CSV dir from root conftest.py ─────────────
 
 @pytest.fixture(scope="module")
 def sample_dataframes(sample_csv_dir) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:

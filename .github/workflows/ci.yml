@@ -33,12 +33,12 @@ jobs:
           # MetaTrader5 is Windows-only; exclude it and install the rest
           grep -v 'MetaTrader5' requirements.txt > /tmp/requirements_ci.txt
           pip install -r /tmp/requirements_ci.txt
+          pip install pytest-timeout
 
       - name: Lint with ruff
         run: |
           pip install ruff
           ruff check python/ tests/ scripts/ --select E,W,F --ignore E501
-        continue-on-error: true   # lint failures are advisory, not blocking
 
       - name: Run tests
-        run: python -m pytest tests/ -q
+        run: python -m pytest tests/ -q --timeout=120

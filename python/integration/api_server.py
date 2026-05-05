@@ -4,12 +4,13 @@ Integration – HTTP API Server (Flask)
 Endpoints:
   GET  /signal      → latest signal JSON
   POST /signal      → receive a signal (from EA callback)
+  POST /result      → report trade close outcome (symbol, exit_price, direction)
   GET  /health      → health check
   GET  /metrics     → performance statistics JSON (Prometheus/Grafana scrape target)
 
 Authentication:
-  If `integration.api_key` is set in config.yaml, all /signal requests must
-  include an `X-API-Key` header matching that value.  Requests with a missing
+  If `integration.api_key` is set in config.yaml, all /signal and /result requests
+  must include an `X-API-Key` header matching that value.  Requests with a missing
   or wrong key are rejected with HTTP 401.  The /health and /metrics endpoints
   are public.
 
@@ -26,7 +27,7 @@ import logging
 from typing import Any
 
 from python.config import INTEGRATION
-from python.performance.tracker import statistics
+from python.performance.tracker import statistics, update_trade_result
 from python.signal_generator.signal_generator import load_latest_signal, save_signal
 
 logger = logging.getLogger(__name__)
@@ -74,6 +75,32 @@ try:
     @app.route("/metrics", methods=["GET"])
     def get_metrics() -> Any:
         return jsonify(statistics())
+
+    @app.route("/result", methods=["POST"])
+    def post_result() -> Any:
+        auth_err = _check_api_key()
+        if auth_err is not None:
+            body, status = auth_err
+            return jsonify(body), status
+        data = request.get_json(force=True)
+        if not data:
+            return jsonify({"error": "empty_body"}), 400
+        _REQUIRED = {"symbol", "exit_price", "direction"}
+        missing = _REQUIRED - data.keys()
+        if missing:
+            return jsonify({"error": "missing_fields", "fields": sorted(missing)}), 400
+        try:
+            update_trade_result(
+                symbol=data["symbol"],
+                entry_price=float(data.get("entry_price", 0.0)),
+                exit_price=float(data["exit_price"]),
+                direction=data["direction"],
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error updating trade result: %s", exc)
+            return jsonify({"error": "update_failed"}), 500
+        logger.info("Trade result received via HTTP POST: %s", data.get("symbol"))
+        return jsonify({"status": "updated"})
 
     @app.route("/signal", methods=["GET"])
     def get_signal() -> Any:

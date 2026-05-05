@@ -13,6 +13,12 @@ Covers:
   - POST /signal → 200 when no API key is configured (auth disabled)
   - POST /signal → 401 when wrong API key is supplied
   - POST /signal → 200 when correct API key is supplied
+  - POST /result → 400 on empty body
+  - POST /result → 400 with "missing_fields" when required keys absent
+  - POST /result → 200 {"status": "updated"} on valid payload
+  - POST /result → calls update_trade_result with correct arguments
+  - POST /result → 401 when wrong API key is supplied
+  - POST /result → 200 when correct API key is supplied
 """
 from __future__ import annotations
 
@@ -176,8 +182,67 @@ class TestPostSignal:
 
 
 # ---------------------------------------------------------------------------
-# GET /metrics  (public, no auth required)
+# POST /result  (auth-gated, reports trade-close outcome)
 # ---------------------------------------------------------------------------
+
+class TestPostResult:
+    _VALID = {
+        "symbol": "EURUSD",
+        "direction": "BUY",
+        "exit_price": 1.11000,
+    }
+
+    def test_returns_400_on_empty_body(self, client):
+        r = client.post("/result", data="", content_type="application/json")
+        assert r.status_code == 400
+
+    def test_returns_400_on_missing_fields(self, client):
+        r = client.post("/result", json={"symbol": "EURUSD"})
+        assert r.status_code == 400
+        body = r.get_json()
+        assert body["error"] == "missing_fields"
+        assert "direction" in body["fields"]
+        assert "exit_price" in body["fields"]
+
+    def test_returns_updated_on_valid_payload(self, client):
+        with patch("python.integration.api_server.update_trade_result"):
+            r = client.post("/result", json=self._VALID)
+        assert r.status_code == 200
+        assert r.get_json() == {"status": "updated"}
+
+    def test_calls_update_trade_result_with_correct_args(self, client):
+        with patch("python.integration.api_server.update_trade_result") as mock_utr:
+            client.post("/result", json=self._VALID)
+        mock_utr.assert_called_once_with(
+            symbol="EURUSD",
+            entry_price=0.0,
+            exit_price=1.11000,
+            direction="BUY",
+        )
+
+    def test_optional_entry_price_forwarded(self, client):
+        payload = {**self._VALID, "entry_price": 1.10000}
+        with patch("python.integration.api_server.update_trade_result") as mock_utr:
+            client.post("/result", json=payload)
+        mock_utr.assert_called_once_with(
+            symbol="EURUSD",
+            entry_price=1.10000,
+            exit_price=1.11000,
+            direction="BUY",
+        )
+
+    def test_unauthorized_with_wrong_key(self, client):
+        with patch.object(api_server, "_API_KEY", "secret"):
+            r = client.post("/result", json=self._VALID,
+                            headers={"X-API-Key": "wrong"})
+        assert r.status_code == 401
+
+    def test_authorized_with_correct_key(self, client):
+        with patch.object(api_server, "_API_KEY", "secret"):
+            with patch("python.integration.api_server.update_trade_result"):
+                r = client.post("/result", json=self._VALID,
+                                headers={"X-API-Key": "secret"})
+        assert r.status_code == 200
 
 class TestMetrics:
     def test_returns_200_with_stats_dict(self, client):

@@ -155,6 +155,7 @@ class TestStatistics:
         assert stats["total"] == 0
         assert stats["win_rate"] == 0.0
         assert stats["expectancy"] == 0.0
+        assert stats["profit_factor"] is None
 
     def _populate(self, tmp_path, monkeypatch, outcomes: list[tuple[str, float]]) -> None:
         """Log signals and set their results. outcomes: [(result, pnl_pips)]."""
@@ -212,6 +213,22 @@ class TestStatistics:
         self._populate(tmp_path, monkeypatch, [("WIN", 50.0), ("LOSS", -100.0), ("WIN", 30.0)])
         stats = tracker_mod.statistics()
         assert stats["max_drawdown_pips"] >= 0.0
+
+    def test_profit_factor_none_when_no_losses(self, tmp_path, monkeypatch):
+        self._populate(tmp_path, monkeypatch, [("WIN", 80.0), ("WIN", 120.0)])
+        stats = tracker_mod.statistics()
+        assert stats["profit_factor"] is None
+
+    def test_profit_factor_correct(self, tmp_path, monkeypatch):
+        # gross wins = 100 + 100 = 200, gross losses = 50 → PF = 4.0
+        self._populate(tmp_path, monkeypatch, [("WIN", 100.0), ("WIN", 100.0), ("LOSS", -50.0)])
+        stats = tracker_mod.statistics()
+        assert stats["profit_factor"] == pytest.approx(4.0)
+
+    def test_profit_factor_none_when_no_trades(self, tmp_path, monkeypatch):
+        _patch_perf_log(tmp_path, monkeypatch)
+        stats = tracker_mod.statistics()
+        assert stats["profit_factor"] is None
 
 
 # ---------------------------------------------------------------------------

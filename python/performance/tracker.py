@@ -178,7 +178,11 @@ def statistics() -> dict:
 
     closed = [r for r in rows if r["result"] in ("WIN", "LOSS")]
     if not closed:
-        return {"total": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "expectancy": 0.0}
+        return {
+            "total": 0, "wins": 0, "losses": 0,
+            "win_rate": 0.0, "expectancy": 0.0,
+            "profit_factor": None,
+        }
 
     wins = sum(1 for r in closed if r["result"] == "WIN")
     losses = len(closed) - wins
@@ -220,6 +224,9 @@ def statistics() -> dict:
         "avg_win_pips": round(avg_win, 2),
         "avg_loss_pips": round(avg_loss, 2),
         "max_drawdown_pips": round(max_dd, 2),
+        "profit_factor": round(
+            sum(p for p in pnls if p > 0) / abs(sum(p for p in pnls if p < 0)), 4
+        ) if any(p < 0 for p in pnls) else None,
     }
 
 

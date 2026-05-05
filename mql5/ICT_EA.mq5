@@ -13,6 +13,7 @@
 //--- Input parameters
 input string   InpSignalFile      = "signals\\latest_signal.json"; // Signal JSON file path
 input string   InpHttpEndpoint    = "http://127.0.0.1:5000/signal"; // HTTP endpoint (if mode=http)
+input string   InpResultEndpoint  = "http://127.0.0.1:5000/result"; // Trade result callback URL
 input int      InpSignalMode      = 0;      // 0=File, 1=HTTP
 input double   InpRiskPercent     = 1.0;    // Risk per trade (%)
 input double   InpMaxDailyLoss    = 3.0;    // Max daily loss (%)
@@ -96,6 +97,20 @@ void OnTradeTransaction(
 
    double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
    g_logger.OnTradeClose(profit);
+
+   // In HTTP mode, report the trade result back to the Python API server so
+   // that tracker.update_trade_result() can update the performance CSV and
+   // supply live labelled data to the ML training pipeline.
+   if(InpSignalMode == 1)
+   {
+      string   sym      = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
+      double   exitPx   = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+      // A SELL-type closing deal means the original position was BUY (and v.v.)
+      long     dealType = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+      string   dir      = (dealType == DEAL_TYPE_SELL) ? "BUY" : "SELL";
+
+      PostTradeResult(sym, dir, exitPx);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -191,6 +206,30 @@ void OnTick()
       Print("✅ Trade executed: ", signal.direction, " ", _Symbol,
             " @ ", signal.entryPrice, " SL=", signal.stopLoss, " TP=", signal.takeProfit);
    }
+}
+
+//+------------------------------------------------------------------+
+//| POST trade result to the Python API /result endpoint             |
+//|                                                                  |
+//| Sends: {"symbol":"…","direction":"BUY|SELL","exit_price":…}      |
+//| Called only in HTTP mode (InpSignalMode == 1).                   |
+//+------------------------------------------------------------------+
+void PostTradeResult(string sym, string dir, double exitPx)
+{
+   string body = StringFormat(
+      "{\"symbol\":\"%s\",\"direction\":\"%s\",\"exit_price\":%.5f}",
+      sym, dir, exitPx
+   );
+
+   uchar  postData[];
+   uchar  result[];
+   string headers = "Content-Type: application/json\r\n";
+   StringToCharArray(body, postData, 0, StringLen(body));
+
+   int res = WebRequest("POST", InpResultEndpoint, headers, 5000,
+                        postData, result, headers);
+   if(res != 200)
+      Print("PostTradeResult: HTTP ", res, " – result not reported to Python");
 }
 
 //+------------------------------------------------------------------+

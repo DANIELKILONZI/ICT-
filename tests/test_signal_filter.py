@@ -184,3 +184,31 @@ class TestPassesMlFilterEnabled:
         a = _make_analysis()
         conf = ml_confidence(a, 0.0, 12)
         assert conf == pytest.approx(-1.0)
+
+
+# ---------------------------------------------------------------------------
+# Feature-contract: build_feature_vector length must match FEATURE_COLS
+# ---------------------------------------------------------------------------
+
+class TestFeatureContract:
+    def test_feature_vector_length_matches_feature_cols(self):
+        """
+        The feature vector produced by build_feature_vector() must have exactly
+        as many columns as FEATURE_COLS in scripts/train_ml.py.
+
+        These two lists are defined independently; this test prevents silent
+        drift between them.
+        """
+        import sys
+        from pathlib import Path
+        _repo = Path(__file__).resolve().parent.parent
+        if str(_repo) not in sys.path:
+            sys.path.insert(0, str(_repo))
+        from scripts.train_ml import FEATURE_COLS  # noqa: PLC0415
+
+        a = _make_analysis()
+        X = build_feature_vector(a, atr_m5=0.0005, hour_utc=10)
+        assert X.shape[1] == len(FEATURE_COLS), (
+            f"build_feature_vector() produces {X.shape[1]} features but "
+            f"scripts/train_ml.FEATURE_COLS has {len(FEATURE_COLS)} entries: {FEATURE_COLS}"
+        )
