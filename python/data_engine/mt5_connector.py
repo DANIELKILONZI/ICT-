@@ -144,7 +144,10 @@ def fetch_ohlcv(
             logger.debug("Fetched %d candles for %s %s", len(df), symbol, timeframe)
             return df
 
-        # No data – may be a transient disconnect; try to reconnect before retrying
+        # No data – may be a transient disconnect; try to reconnect before retrying.
+        # We mark _connected=False under the lock so that any concurrent call to
+        # _ensure_mt5() that arrives before the sleep completes will also attempt
+        # re-initialisation rather than skipping the health-check path.
         logger.warning(
             "MT5 fetch attempt %d/%d returned no data for %s %s – retrying in %.1fs.",
             attempt, _retries, symbol, timeframe, delay,
