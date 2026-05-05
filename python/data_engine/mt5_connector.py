@@ -13,6 +13,7 @@ to detect a stale connection before retrying once.
 from __future__ import annotations
 
 import logging
+import time
 import threading
 from datetime import datetime, timezone
 from typing import Optional
@@ -94,12 +95,19 @@ def fetch_ohlcv(
     timeframe: str,
     count: int = 500,
     utc_from: Optional[datetime] = None,
+    _retries: int = 3,
+    _backoff: float = 2.0,
 ) -> pd.DataFrame:
     """
     Fetch OHLCV data from MetaTrader5.
 
     Returns a DataFrame with columns: time, open, high, low, close, volume
     Index is reset integer.  Returns empty DataFrame on failure.
+
+    On a transient failure (``copy_rates_*`` returns None after a healthy
+    ``_ensure_mt5()``) the call is retried up to *_retries* times with
+    exponential backoff starting at *_backoff* seconds.  This handles brief
+    MT5 disconnects without requiring a full process restart.
 
     Raises
     ------
@@ -120,22 +128,37 @@ def fetch_ohlcv(
     if tf_const is None:
         raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-    if utc_from:
-        rates = mt5.copy_rates_from(symbol, tf_const, utc_from, count)
-    else:
-        rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, count)
+    delay = _backoff
+    for attempt in range(1, _retries + 1):
+        if utc_from:
+            rates = mt5.copy_rates_from(symbol, tf_const, utc_from, count)
+        else:
+            rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, count)
 
-    if rates is None or len(rates) == 0:
-        logger.warning("No data returned for %s %s", symbol, timeframe)
-        return pd.DataFrame()
+        if rates is not None and len(rates) > 0:
+            df = pd.DataFrame(rates)
+            df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
+            df = df.rename(columns={"tick_volume": "volume"})
+            df = df[["time", "open", "high", "low", "close", "volume"]].copy()
+            df = df.sort_values("time").reset_index(drop=True)
+            logger.debug("Fetched %d candles for %s %s", len(df), symbol, timeframe)
+            return df
 
-    df = pd.DataFrame(rates)
-    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
-    df = df.rename(columns={"tick_volume": "volume"})
-    df = df[["time", "open", "high", "low", "close", "volume"]].copy()
-    df = df.sort_values("time").reset_index(drop=True)
-    logger.debug("Fetched %d candles for %s %s", len(df), symbol, timeframe)
-    return df
+        # No data – may be a transient disconnect; try to reconnect before retrying
+        logger.warning(
+            "MT5 fetch attempt %d/%d returned no data for %s %s – retrying in %.1fs.",
+            attempt, _retries, symbol, timeframe, delay,
+        )
+        global _connected  # noqa: PLW0603
+        with _conn_lock:
+            _connected = False  # force re-initialise on next _ensure_mt5() call
+        time.sleep(delay)
+        delay *= 2.0
+        if not _ensure_mt5():
+            logger.error("MT5 reconnect failed on attempt %d.", attempt)
+
+    logger.warning("No data returned for %s %s after %d attempts", symbol, timeframe, _retries)
+    return pd.DataFrame()
 
 
 def get_account_info() -> dict:

@@ -23,6 +23,7 @@ import pytest
 pytest.importorskip("flask", reason="Flask is required for api_server tests")
 
 from python.integration import api_server  # noqa: E402  (after importorskip)
+from python.performance.tracker import statistics as _statistics  # noqa: E402
 
 
 @pytest.fixture()
@@ -171,4 +172,27 @@ class TestPostSignal:
         with patch.object(api_server, "_API_KEY", ""):
             with patch("python.integration.api_server.save_signal"):
                 r = client.post("/signal", json=self._VALID)
+        assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /metrics  (public, no auth required)
+# ---------------------------------------------------------------------------
+
+class TestMetrics:
+    def test_returns_200_with_stats_dict(self, client):
+        fake_stats = {"total": 10, "wins": 7, "losses": 3, "win_rate": 0.7}
+        with patch("python.integration.api_server.statistics", return_value=fake_stats):
+            r = client.get("/metrics")
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["total"] == 10
+        assert body["win_rate"] == 0.7
+
+    def test_no_api_key_required(self, client):
+        """Metrics endpoint must be public even when an API key is configured."""
+        fake_stats = {"total": 0}
+        with patch.object(api_server, "_API_KEY", "supersecret"):
+            with patch("python.integration.api_server.statistics", return_value=fake_stats):
+                r = client.get("/metrics")
         assert r.status_code == 200

@@ -15,12 +15,31 @@ import json
 import logging
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from python.config import SIGNAL_OUTPUT_PATH
+from python.config import INTEGRATION, SIGNAL_OUTPUT_PATH
 
 logger = logging.getLogger(__name__)
+
+_SIGNAL_TTL: int = int(INTEGRATION.get("signal_ttl_seconds", 300))
+
+
+def _is_signal_fresh(data: dict) -> bool:
+    """Return True when *data* was emitted within the configured TTL window."""
+    ts = data.get("timestamp")
+    if not ts:
+        return True  # no timestamp → let the callback decide
+    try:
+        signal_time = datetime.fromisoformat(ts)
+        age = (datetime.now(timezone.utc) - signal_time).total_seconds()
+        if age > _SIGNAL_TTL:
+            logger.debug("File bridge: signal expired (age %.0fs > TTL %ds) – skipping.", age, _SIGNAL_TTL)
+            return False
+    except (ValueError, TypeError):
+        pass
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +70,8 @@ def _watch_with_watchdog(
                     return  # spurious duplicate event
                 last_mtime = mtime
                 data = json.loads(SIGNAL_OUTPUT_PATH.read_text())
-                callback(data)
+                if _is_signal_fresh(data):
+                    callback(data)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("File bridge error: %s", exc)
 
@@ -91,7 +111,8 @@ def _watch_with_polling(
                 if mtime != last_mtime:
                     last_mtime = mtime
                     data = json.loads(SIGNAL_OUTPUT_PATH.read_text())
-                    callback(data)
+                    if _is_signal_fresh(data):
+                        callback(data)
         except Exception as exc:  # noqa: BLE001
             logger.warning("File bridge error: %s", exc)
         time.sleep(poll_interval)

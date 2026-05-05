@@ -5,11 +5,13 @@ Endpoints:
   GET  /signal      → latest signal JSON
   POST /signal      → receive a signal (from EA callback)
   GET  /health      → health check
+  GET  /metrics     → performance statistics JSON (Prometheus/Grafana scrape target)
 
 Authentication:
   If `integration.api_key` is set in config.yaml, all /signal requests must
   include an `X-API-Key` header matching that value.  Requests with a missing
-  or wrong key are rejected with HTTP 401.  The /health endpoint is public.
+  or wrong key are rejected with HTTP 401.  The /health and /metrics endpoints
+  are public.
 
 Production deployment:
   The server is started via Gunicorn when available (2 workers by default,
@@ -24,6 +26,7 @@ import logging
 from typing import Any
 
 from python.config import INTEGRATION
+from python.performance.tracker import statistics
 from python.signal_generator.signal_generator import load_latest_signal, save_signal
 
 logger = logging.getLogger(__name__)
@@ -67,6 +70,10 @@ try:
     @app.route("/health", methods=["GET"])
     def health() -> Any:
         return jsonify({"status": "ok"})
+
+    @app.route("/metrics", methods=["GET"])
+    def get_metrics() -> Any:
+        return jsonify(statistics())
 
     @app.route("/signal", methods=["GET"])
     def get_signal() -> Any:

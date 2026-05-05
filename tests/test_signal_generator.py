@@ -294,3 +294,99 @@ class TestSaveLoadRoundTrip:
         assert target.exists()
         data = json.loads(target.read_text())
         assert data["symbol"] == "EURUSD"
+
+
+# ---------------------------------------------------------------------------
+# Signal TTL boundary tests (Item 5)
+# ---------------------------------------------------------------------------
+
+class TestSignalTTL:
+    """
+    Verify load_latest_signal() respects the signal_ttl_seconds setting.
+
+    Uses monkeypatching to control the apparent signal age without sleeping.
+    """
+
+    def _write_signal(self, tmp_path, monkeypatch, timestamp_iso: str) -> None:
+        import python.signal_generator.signal_generator as sg_mod
+
+        target = tmp_path / "signal.json"
+        monkeypatch.setattr(sg_mod, "SIGNAL_OUTPUT_PATH", target)
+        payload = {
+            "symbol":      "EURUSD",
+            "direction":   "BUY",
+            "entry_price": 1.10000,
+            "stop_loss":   1.09000,
+            "take_profit": 1.12000,
+            "timestamp":   timestamp_iso,
+        }
+        target.write_text(json.dumps(payload))
+
+    def test_fresh_signal_within_ttl_is_returned(self, tmp_path, monkeypatch):
+        """Signal timestamped 10 s ago should be returned (TTL default 300 s)."""
+        from datetime import datetime, timezone, timedelta
+        import python.signal_generator.signal_generator as sg_mod
+
+        recent_ts = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        self._write_signal(tmp_path, monkeypatch, recent_ts)
+
+        result = sg_mod.load_latest_signal()
+        assert result is not None
+        assert result["symbol"] == "EURUSD"
+
+    def test_expired_signal_returns_none(self, tmp_path, monkeypatch):
+        """Signal timestamped 3600 s ago (> 300 s TTL) should return None."""
+        from datetime import datetime, timezone, timedelta
+        import python.signal_generator.signal_generator as sg_mod
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(seconds=3600)).isoformat()
+        self._write_signal(tmp_path, monkeypatch, old_ts)
+
+        result = sg_mod.load_latest_signal()
+        assert result is None
+
+    def test_signal_just_at_boundary_is_expired(self, tmp_path, monkeypatch):
+        """Signal exactly TTL+1 seconds old must return None."""
+        from datetime import datetime, timezone, timedelta
+        import python.signal_generator.signal_generator as sg_mod
+
+        # Default TTL is 300; use a small custom TTL via the INTEGRATION mock
+        ttl = 60
+        old_ts = (datetime.now(timezone.utc) - timedelta(seconds=ttl + 1)).isoformat()
+        self._write_signal(tmp_path, monkeypatch, old_ts)
+        monkeypatch.setattr(
+            sg_mod,
+            "SIGNAL_OUTPUT_PATH",
+            tmp_path / "signal.json",
+        )
+        # Patch INTEGRATION inside the module so TTL is controlled
+        import python.signal_generator.signal_generator as sg_mod2
+        original_integration = sg_mod2.__dict__.get("INTEGRATION", None)
+        # We patch via the module's imported name binding
+        with pytest.MonkeyPatch().context() as mp:
+            mp.setattr(sg_mod2, "SIGNAL_OUTPUT_PATH", tmp_path / "signal.json")
+            # Override the INTEGRATION lookup inside load_latest_signal
+            from unittest.mock import patch as _patch
+            with _patch("python.config.INTEGRATION", {"signal_ttl_seconds": ttl}):
+                result = sg_mod2.load_latest_signal()
+        assert result is None
+
+    def test_signal_just_before_expiry_is_returned(self, tmp_path, monkeypatch):
+        """Signal TTL-10 seconds old must still be returned."""
+        from datetime import datetime, timezone, timedelta
+        import python.signal_generator.signal_generator as sg_mod
+
+        ttl = 300
+        recent_ts = (datetime.now(timezone.utc) - timedelta(seconds=ttl - 10)).isoformat()
+        self._write_signal(tmp_path, monkeypatch, recent_ts)
+
+        result = sg_mod.load_latest_signal()
+        assert result is not None
+
+    def test_missing_file_returns_none(self, tmp_path, monkeypatch):
+        import python.signal_generator.signal_generator as sg_mod
+
+        nonexistent = tmp_path / "no_signal.json"
+        monkeypatch.setattr(sg_mod, "SIGNAL_OUTPUT_PATH", nonexistent)
+
+        assert sg_mod.load_latest_signal() is None

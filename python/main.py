@@ -162,6 +162,15 @@ def run_analysis_cycle() -> None:
         logger.warning("Daily loss limit reached – no new signals will be emitted today.")
         return
 
+    # ── Max-trades-per-day guard ─────────────────────────────────────────────
+    max_trades: int = int(CONFIG["risk"].get("max_trades_per_day", 5))
+    if trades_today_count() >= max_trades:
+        logger.warning(
+            "Max trades per day (%d) reached – no new signals will be emitted today.",
+            max_trades,
+        )
+        return
+
     tf_macro = TIMEFRAMES.get("macro", "D1")
     tf_struct = TIMEFRAMES.get("structure", "H1")
     tf_entry = TIMEFRAMES.get("entry", "M5")
