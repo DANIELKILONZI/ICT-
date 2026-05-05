@@ -202,6 +202,10 @@ def statistics() -> dict:
     avg_loss = abs(sum(p for p in pnls if p < 0)) / max(losses, 1)
     expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
 
+    gross_wins   = sum(p for p in pnls if p > 0)
+    gross_losses = abs(sum(p for p in pnls if p < 0))
+    profit_factor = round(gross_wins / gross_losses, 4) if gross_losses > 0 else None
+
     # Max drawdown
     equity_curve = [0.0]
     for p in pnls:
@@ -224,9 +228,7 @@ def statistics() -> dict:
         "avg_win_pips": round(avg_win, 2),
         "avg_loss_pips": round(avg_loss, 2),
         "max_drawdown_pips": round(max_dd, 2),
-        "profit_factor": round(
-            sum(p for p in pnls if p > 0) / abs(sum(p for p in pnls if p < 0)), 4
-        ) if any(p < 0 for p in pnls) else None,
+        "profit_factor": profit_factor,
     }
 
 
