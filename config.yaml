@@ -3,8 +3,13 @@
 system:
   log_level: INFO
   log_file: logs/ict_system.log
-  signal_output_path: signals/latest_signal.json
-  performance_log: logs/performance.csv
+  signal_output_path: signals/active   # directory; one JSON per symbol
+  performance_log: logs/performance.csv   # legacy/compat – same as signals_log
+  signals_log: logs/signals.csv           # Layer 2: published signals
+  candidates_log: logs/candidates.csv     # Layer 1: valid analysis setups
+  executions_log: logs/executions.csv     # Layer 3: confirmed EA executions
+  rejections_log: logs/rejections.csv     # Layer 3: EA-side rejections
+  execution_feedback_dir: signals/feedback # EA writes JSON feedback here
   scan_interval_seconds: 60
 
 mt5:
@@ -55,6 +60,16 @@ scoring:
   m5_fvg: 0.10              # active M5 fair-value gap present
   min_valid_score: 0.50     # minimum score required to mark a setup as valid
 
+# Hard gates that must ALL pass before any scoring takes place.
+# These are enforced inside each playbook; this block documents the rules.
+required_conditions:
+  d1_bias_alignment: true          # Setup 1: D1 + H1 trend must agree
+  d1_ob_presence: true             # Setup 2: price must be at an active D1 Order Block
+  london_killzone_time: true        # Setup 3: must be inside London Killzone window
+  h1_confirmation_required: true   # all setups: H1 BOS or sweep must confirm direction
+  m5_liquidity_sweep_required: true # all setups: M5/H1 sweep must be present
+  min_rr_required: true            # minimum R:R enforced before emitting any signal
+
 # Symbol-aware pip sizes: keys are substrings matched against the symbol name.
 # The first matching key wins; "default" is the fallback.
 pip_sizes:
@@ -82,20 +97,33 @@ signal:
 
 ml:
   enabled: false
+  mode: advisory              # "advisory" (recommended) | "gate" (legacy boolean filter)
   model_path: ml/models/xgb_filter.pkl
   confidence_threshold: 0.65
+  high_confidence_threshold: 0.80   # score >= this → quality=HIGH
+  publish_min_quality: LOW    # minimum ML quality to publish: LOW | MEDIUM | HIGH
+  unavailable_action: publish # "publish" (fail-open) | "block" (fail-closed) when model missing
 
 integration:
   mode: file            # file | http | socket
-  http_host: "0.0.0.0"
+  http_host: "127.0.0.1"  # localhost-only by default; set to 0.0.0.0 if binding to all interfaces
   http_port: 5000
   http_workers: 2       # Gunicorn worker processes
   socket_host: "0.0.0.0"
   socket_port: 9999
   signal_ttl_seconds: 300     # signal expires after N seconds
   api_key: ""           # Set a non-empty secret to require X-API-Key on /signal endpoints
+  # Security hardening (Issue 12)
+  ip_allowlist: []      # e.g. ["127.0.0.1", "10.0.0.5"]; empty list = allow all
+  hmac_secret: ""       # Set to a long random string to require HMAC-SHA256 signatures on POST
+  nonce_window_seconds: 300   # reject replay of nonces seen within this window
 
 telegram:
   enabled: false
   bot_token: ""
   chat_id: ""
+
+# Backtest export mode (Issue 10)
+backtest:
+  output_dir: backtests/signals   # JSONL files written here
+  data_source: csv                # csv | mt5

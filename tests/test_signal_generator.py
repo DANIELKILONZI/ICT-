@@ -5,13 +5,20 @@ Covers:
   - generate_signal() rejects invalid/low-confidence/missing-price analyses
   - generate_signal() rejects setups with R:R below minimum
   - generate_signal() returns a correctly shaped signal dict for valid inputs
-  - save_signal() / load_latest_signal() round-trip
+  - New required fields: signal_id, created_at, expires_at, valid_from,
+    engine_cycle_id, status, payload_hash
+  - save_signal() writes per-symbol JSON atomically
+  - load_latest_signal(symbol) round-trip
+  - load_latest_signal(symbol) returns None for expired signals
   - String fields in the output signal contain no characters that would
     break the MQL5 simple JSON parser
 """
 from __future__ import annotations
 
 import json
+import time
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from python.strategy_engine.market_structure import TrendDirection
@@ -29,6 +36,8 @@ from python.signal_generator.signal_generator import (
 # ---------------------------------------------------------------------------
 
 _REQUIRED_SIGNAL_KEYS = {
+    "signal_id", "created_at", "expires_at", "valid_from",
+    "engine_cycle_id", "status", "payload_hash",
     "symbol", "direction", "entry_price", "stop_loss", "take_profit",
     "risk_reward", "risk_percent", "confidence_score", "timestamp",
     "setup_type",
@@ -120,8 +129,8 @@ class TestGenerateSignalRejections:
 # ---------------------------------------------------------------------------
 
 class TestGenerateSignalValid:
-    def _valid_signal(self):
-        return generate_signal(_make_analysis())
+    def _valid_signal(self, cycle_id=""):
+        return generate_signal(_make_analysis(), cycle_id=cycle_id)
 
     def test_returns_dict(self):
         assert isinstance(self._valid_signal(), dict)
@@ -136,7 +145,6 @@ class TestGenerateSignalValid:
 
     def test_prices_rounded(self):
         sig = self._valid_signal()
-        # Should be a float (rounded to 5 dp)
         assert isinstance(sig["entry_price"], float)
 
     def test_setup_type_is_ict_prefixed(self):
@@ -145,6 +153,35 @@ class TestGenerateSignalValid:
     def test_confidence_score_between_0_and_1(self):
         sig = self._valid_signal()
         assert 0.0 <= sig["confidence_score"] <= 1.0
+
+    def test_status_is_active(self):
+        sig = self._valid_signal()
+        assert sig["status"] == "ACTIVE"
+
+    def test_signal_id_contains_symbol(self):
+        sig = self._valid_signal()
+        assert "EURUSD" in sig["signal_id"]
+
+    def test_expires_at_after_created_at(self):
+        sig = self._valid_signal()
+        created = datetime.fromisoformat(sig["created_at"].replace("Z", "+00:00"))
+        expires = datetime.fromisoformat(sig["expires_at"].replace("Z", "+00:00"))
+        assert expires > created
+
+    def test_engine_cycle_id_propagated(self):
+        sig = self._valid_signal(cycle_id="cycle-000042")
+        assert sig["engine_cycle_id"] == "cycle-000042"
+
+    def test_payload_hash_format(self):
+        sig = self._valid_signal()
+        assert sig["payload_hash"].startswith("sha256:")
+
+    def test_payload_hash_covers_payload(self):
+        """Hash computed on the same payload should be deterministic."""
+        from python.signal_generator.signal_generator import _compute_payload_hash
+        sig = self._valid_signal()
+        expected = _compute_payload_hash({k: v for k, v in sig.items() if k != "payload_hash"})
+        assert sig["payload_hash"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -184,15 +221,55 @@ class TestSignalStringSafety:
 
 class TestSaveLoadRoundTrip:
     def test_round_trip(self, tmp_path, monkeypatch):
-        import python.signal_generator.signal_generator as sg_mod
+        import python.config as cfg_mod
 
-        target = tmp_path / "test_signal.json"
-        monkeypatch.setattr(sg_mod, "SIGNAL_OUTPUT_PATH", target)
+        active_dir = tmp_path / "active"
+        active_dir.mkdir()
+        monkeypatch.setattr(cfg_mod, "SIGNAL_ACTIVE_DIR", active_dir)
 
         sig = generate_signal(_make_analysis())
         save_signal(sig)
 
-        # Verify the file was written with expected content
-        assert target.exists()
-        data = json.loads(target.read_text())
+        expected = active_dir / "EURUSD.json"
+        assert expected.exists()
+        data = json.loads(expected.read_text())
         assert data["symbol"] == "EURUSD"
+
+    def test_load_after_save(self, tmp_path, monkeypatch):
+        import python.config as cfg_mod
+
+        active_dir = tmp_path / "active"
+        active_dir.mkdir()
+        monkeypatch.setattr(cfg_mod, "SIGNAL_ACTIVE_DIR", active_dir)
+
+        sig = generate_signal(_make_analysis())
+        save_signal(sig)
+
+        loaded = load_latest_signal("EURUSD")
+        assert loaded is not None
+        assert loaded["symbol"] == "EURUSD"
+        assert loaded["signal_id"] == sig["signal_id"]
+
+    def test_load_returns_none_for_unknown_symbol(self, tmp_path, monkeypatch):
+        import python.config as cfg_mod
+
+        active_dir = tmp_path / "active"
+        active_dir.mkdir()
+        monkeypatch.setattr(cfg_mod, "SIGNAL_ACTIVE_DIR", active_dir)
+
+        assert load_latest_signal("GBPUSD") is None
+
+    def test_load_returns_none_when_expired(self, tmp_path, monkeypatch):
+        import python.config as cfg_mod
+
+        active_dir = tmp_path / "active"
+        active_dir.mkdir()
+        monkeypatch.setattr(cfg_mod, "SIGNAL_ACTIVE_DIR", active_dir)
+
+        sig = generate_signal(_make_analysis())
+        # Manually override expires_at to a past time
+        past = datetime.now(timezone.utc) - timedelta(seconds=10)
+        sig["expires_at"] = past.strftime("%Y-%m-%dT%H:%M:%SZ")
+        save_signal(sig)
+
+        assert load_latest_signal("EURUSD") is None

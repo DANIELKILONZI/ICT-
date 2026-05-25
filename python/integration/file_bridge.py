@@ -1,6 +1,7 @@
 """
 Integration – File Bridge
-Watches the signal JSON file and notifies subscribers via a simple callback.
+Watches the signals/active/ directory and notifies subscribers via a callback
+whenever any symbol's signal JSON file changes.
 
 Uses the ``watchdog`` library for OS-native file-change notifications
 (inotify on Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows)
@@ -13,15 +14,13 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
-from python.config import SIGNAL_OUTPUT_PATH
+from python.config import SIGNAL_ACTIVE_DIR
 
 logger = logging.getLogger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Watchdog-based implementation
@@ -35,33 +34,34 @@ def _watch_with_watchdog(
     from watchdog.events import FileSystemEventHandler  # type: ignore
     from watchdog.observers import Observer  # type: ignore
 
-    watched_dir = SIGNAL_OUTPUT_PATH.parent
-    watched_dir.mkdir(parents=True, exist_ok=True)
+    SIGNAL_ACTIVE_DIR.mkdir(parents=True, exist_ok=True)
 
-    last_mtime: float = 0.0
+    last_mtimes: dict[Path, float] = {}
 
     class _Handler(FileSystemEventHandler):
-        def on_modified(self, event):
-            nonlocal last_mtime
-            if Path(event.src_path).resolve() != SIGNAL_OUTPUT_PATH.resolve():
+        def _handle(self, src_path: str) -> None:
+            path = Path(src_path).resolve()
+            if path.suffix != ".json":
                 return
             try:
-                mtime = SIGNAL_OUTPUT_PATH.stat().st_mtime
-                if mtime == last_mtime:
+                mtime = path.stat().st_mtime
+                if last_mtimes.get(path) == mtime:
                     return  # spurious duplicate event
-                last_mtime = mtime
-                data = json.loads(SIGNAL_OUTPUT_PATH.read_text())
+                last_mtimes[path] = mtime
+                data = json.loads(path.read_text())
                 callback(data)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("File bridge error: %s", exc)
 
-        # Also handle CREATE so we catch the very first write
+        def on_modified(self, event):
+            self._handle(event.src_path)
+
         on_created = on_modified
 
     observer = Observer()
-    observer.schedule(_Handler(), str(watched_dir), recursive=False)
+    observer.schedule(_Handler(), str(SIGNAL_ACTIVE_DIR), recursive=False)
     observer.start()
-    logger.info("File bridge (watchdog) watching %s", SIGNAL_OUTPUT_PATH)
+    logger.info("File bridge (watchdog) watching %s", SIGNAL_ACTIVE_DIR)
 
     try:
         while True:
@@ -81,19 +81,23 @@ def _watch_with_polling(
     poll_interval: float,
 ) -> None:
     """Busy-wait polling fallback used when watchdog is unavailable."""
-    last_mtime: float = 0.0
+    last_mtimes: dict[Path, float] = {}
 
-    logger.info("File bridge (polling, %.1fs) watching %s", poll_interval, SIGNAL_OUTPUT_PATH)
+    logger.info("File bridge (polling, %.1fs) watching %s", poll_interval, SIGNAL_ACTIVE_DIR)
     while True:
         try:
-            if SIGNAL_OUTPUT_PATH.exists():
-                mtime = SIGNAL_OUTPUT_PATH.stat().st_mtime
-                if mtime != last_mtime:
-                    last_mtime = mtime
-                    data = json.loads(SIGNAL_OUTPUT_PATH.read_text())
-                    callback(data)
+            SIGNAL_ACTIVE_DIR.mkdir(parents=True, exist_ok=True)
+            for path in SIGNAL_ACTIVE_DIR.glob("*.json"):
+                mtime = path.stat().st_mtime
+                if last_mtimes.get(path) != mtime:
+                    last_mtimes[path] = mtime
+                    try:
+                        data = json.loads(path.read_text())
+                        callback(data)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("File bridge error reading %s: %s", path, exc)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("File bridge error: %s", exc)
+            logger.warning("File bridge poll error: %s", exc)
         time.sleep(poll_interval)
 
 
@@ -106,12 +110,14 @@ def poll_signal_file(
     poll_interval: float = 1.0,
 ) -> None:
     """
-    Blocking loop that calls *callback* whenever the signal JSON file changes.
+    Blocking loop that calls *callback* whenever any symbol's signal JSON
+    file in the active signals directory changes.
 
     Prefers OS-native notifications (watchdog) over polling.
     """
     try:
-        import watchdog  # noqa: F401 - check availability        _watch_with_watchdog(callback, poll_interval)
+        import watchdog  # noqa: F401 - check availability
+        _watch_with_watchdog(callback, poll_interval)
     except ImportError:
         logger.warning("watchdog not installed – falling back to polling. "
                        "Install watchdog for more efficient file monitoring.")

@@ -32,7 +32,6 @@ from python.strategy_engine import (
 )
 from python.strategy_engine import playbooks
 from python.strategy_engine.market_structure import TrendDirection
-from python.strategy_engine.util import atr_value as _atr_value
 
 logger = logging.getLogger(__name__)
 

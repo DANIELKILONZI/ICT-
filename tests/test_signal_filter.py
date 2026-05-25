@@ -8,6 +8,7 @@ Covers:
   - passes_ml_filter() rejects (fail-closed) when model file is absent and
     ML is enabled
   - ml_confidence() returns -1.0 when model is unavailable
+  - ml_evaluate() returns structured advisory dict
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from python.ml.signal_filter import (
     _zone_int,
     build_feature_vector,
     ml_confidence,
+    ml_evaluate,
     passes_ml_filter,
 )
 
@@ -184,3 +186,62 @@ class TestPassesMlFilterEnabled:
         a = _make_analysis()
         conf = ml_confidence(a, 0.0, 12)
         assert conf == pytest.approx(-1.0)
+
+
+# ---------------------------------------------------------------------------
+# ml_evaluate – advisory mode
+# ---------------------------------------------------------------------------
+
+class TestMlEvaluate:
+    def test_returns_disabled_when_ml_off(self):
+        """When ml.enabled is False, ml_evaluate returns DISABLED."""
+        a = _make_analysis()
+        result = ml_evaluate(a)
+        assert result["ml_enabled"] is False
+        assert result["ml_decision"] == "DISABLED"
+        assert result["ml_quality"] == "UNKNOWN"
+        assert result["ml_features"] == {}
+
+    def test_returns_unavailable_when_model_missing(self, monkeypatch):
+        """When ml.enabled=True but no model, returns UNAVAILABLE."""
+        import python.ml.signal_filter as sf
+        monkeypatch.setitem(sf.ML_CFG, "enabled", True)
+        monkeypatch.setattr(sf, "_model", None)
+        monkeypatch.setattr(sf, "_MODEL_PATH", sf._MODEL_PATH.parent / "nonexistent.pkl")
+
+        a = _make_analysis()
+        result = ml_evaluate(a)
+        assert result["ml_enabled"] is True
+        assert result["ml_decision"] == "UNAVAILABLE"
+        assert result["ml_quality"] == "UNKNOWN"
+        assert result["ml_score"] == -1.0
+
+    def test_features_dict_populated_when_enabled(self, monkeypatch):
+        """When ML is enabled, features dict contains expected keys."""
+        import python.ml.signal_filter as sf
+        monkeypatch.setitem(sf.ML_CFG, "enabled", True)
+        monkeypatch.setattr(sf, "_model", None)
+        monkeypatch.setattr(sf, "_MODEL_PATH", sf._MODEL_PATH.parent / "nonexistent.pkl")
+
+        a = _make_analysis()
+        result = ml_evaluate(a, atr_m5=0.0005, hour_utc=10, spread_pips=1.5)
+        features = result["ml_features"]
+        assert "confluence_score" in features
+        assert "session_hour_utc" in features
+        assert "spread_pips" in features
+        assert features["session_hour_utc"] == 10
+        assert features["spread_pips"] == 1.5
+
+    def test_never_contains_entry_sl_tp(self, monkeypatch):
+        """ML metadata must NEVER contain entry, SL, or TP values."""
+        import python.ml.signal_filter as sf
+        monkeypatch.setitem(sf.ML_CFG, "enabled", True)
+        monkeypatch.setattr(sf, "_model", None)
+        monkeypatch.setattr(sf, "_MODEL_PATH", sf._MODEL_PATH.parent / "nonexistent.pkl")
+
+        a = _make_analysis()
+        result = ml_evaluate(a)
+        all_values = str(result)
+        assert "entry_price" not in result
+        assert "stop_loss" not in result
+        assert "take_profit" not in result

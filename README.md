@@ -1,475 +1,264 @@
 # ICT Multi-Timeframe Trading System
 
-A **production-grade**, fully rule-based algorithmic trading system implementing [ICT (Inner Circle Trader)](https://www.youtube.com/@InnerCircleTrader) concepts. The Python engine analyses market structure across D1 → H1 → M5 timeframes and emits structured JSON signals consumed by a MetaTrader 5 Expert Advisor.
+A modular ICT-inspired algorithmic trading system with:
+- a **Python analysis engine** (signal generation, policy, risk gates, logging)
+- a **MetaTrader 5 EA** (execution, broker/runtime checks, execution feedback)
+
+The Python side and EA are decoupled through file or HTTP integration.
 
 ---
 
-## Table of Contents
+## What this project does
 
-1. [Architecture](#architecture)
-2. [ICT Concepts Implemented](#ict-concepts-implemented)
-3. [Project Structure](#project-structure)
-4. [Quick Start](#quick-start)
-5. [Configuration Reference](#configuration-reference)
-6. [Signal Format](#signal-format)
-7. [Integration Modes](#integration-modes)
-8. [MT5 Expert Advisor](#mt5-expert-advisor)
-9. [ML Signal Filter](#ml-signal-filter)
-10. [Performance Tracking](#performance-tracking)
-11. [Testing](#testing)
-12. [Contributing](#contributing)
-13. [Risk Disclaimer](#risk-disclaimer)
+- Runs multi-timeframe analysis (D1 → H1 → M5)
+- Detects ICT-style structure and confluence (BOS, FVG, OB, liquidity, premium/discount)
+- Generates execution-ready signals with TTL and payload hash
+- Applies Python-side risk guards before publishing
+- Supports optional ML scoring (advisory policy mode)
+- Tracks candidates, published signals, and EA execution/rejection feedback
 
 ---
 
-## Architecture
+## High-level architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                       ICT Trading System                            │
-├────────────────────────────┬────────────────────────────────────────┤
-│   PYTHON ENGINE            │   METATRADER 5 EA                      │
-│                            │                                        │
-│  ┌──────────────────────┐  │  ┌──────────────────────────────────┐  │
-│  │  Data Engine         │  │  │  ICT_EA.mq5                      │  │
-│  │  MT5 (pooled conn.)  │  │  │  • Reads signal JSON or HTTP     │  │
-│  │  CSV / SQLite cache  │  │  │  • Calculates position size      │  │
-│  └──────────┬───────────┘  │  │  • Places limit/market orders    │  │
-│             │              │  │  • Enforces SL / TP / daily DD   │  │
-│  ┌──────────▼───────────┐  │  │  • Prevents duplicate trades     │  │
-│  │  Strategy Engine     │  │  │  • London + NY session filter    │  │
-│  │  D1 → H1 → M5        │  │  │  • Strategy Tester compatible    │  │
-│  │  Market Structure    │  │  │  • Live win/loss stat tracking   │  │
-│  │  BOS · FVG · OB      │  │  └──────────────────────────────────┘  │
-│  │  Liquidity · P/D     │  │              ▲                        │
-│  └──────────┬───────────┘  │              │  signals/latest_signal │
-│             │              │              │  .json  OR  HTTP /signal│
-│  ┌──────────▼───────────┐  │              │                        │
-│  │  Signal Generator    │──┼──────────────┘                        │
-│  │  Spread-adjusted R:R │  │                                        │
-│  │  Confidence gate     │  │                                        │
-│  └──────────┬───────────┘  │                                        │
-│             │              │                                        │
-│  ┌──────────▼───────────┐  │                                        │
-│  │  ML Filter (XGBoost) │  │                                        │
-│  │  optional            │  │                                        │
-│  └──────────┬───────────┘  │                                        │
-│             │              │                                        │
-│  ┌──────────▼───────────┐  │                                        │
-│  │  Performance Tracker │  │                                        │
-│  │  CSV · Stats · TG    │  │                                        │
-│  └──────────────────────┘  │                                        │
-└────────────────────────────┴────────────────────────────────────────┘
+```text
+Data Engine (MT5/CSV + cache)
+        ↓
+Strategy Engine (D1/H1/M5 analysis)
+        ↓
+Signal Generator (RR checks, TTL, hash)
+        ↓
+Signal Policy (ICT + risk gate + ML decision)
+        ↓
+Integration (file or HTTP)
+        ↓
+MT5 EA execution + feedback
+        ↓
+Performance tracker logs/statistics
 ```
 
-The Python engine and MT5 EA are **decoupled**: the engine writes a JSON signal file (or serves it over HTTP) and the EA polls for it independently. This means the Python side can run on Linux while the EA runs on a Windows/Wine MT5 instance on the same network.
-
 ---
 
-## ICT Concepts Implemented
+## Repository structure
 
-| Module | Concept | Rule |
-|--------|---------|------|
-| `market_structure` | Swing High | `High[i] > High[i±N]` for all N in 1..lookback |
-| `market_structure` | Swing Low | `Low[i] < Low[i±N]` for all N in 1..lookback |
-| `market_structure` | Trend | HH + HL = Bullish · LL + LH = Bearish |
-| `bos_detector` | Bullish BOS | Close > last confirmed swing high |
-| `bos_detector` | Bearish BOS | Close < last confirmed swing low |
-| `liquidity_engine` | Equal Highs/Lows | Within configurable pip threshold |
-| `liquidity_engine` | Stop Hunt | Wick breaks level; close returns inside |
-| `liquidity_engine` | Liquidity Sweep | Price sweeps liquidity and closes back |
-| `fvg_detector` | Bullish FVG | `High[i] < Low[i+2]` + ATR displacement candle |
-| `fvg_detector` | Bearish FVG | `Low[i] > High[i+2]` + ATR displacement candle |
-| `order_block_detector` | Bullish OB | Last bearish candle before a bullish BOS displacement |
-| `order_block_detector` | Bearish OB | Last bullish candle before a bearish BOS displacement |
-| `premium_discount` | P/D Zones | Fibonacci 50% = equilibrium; BUY below 50%, SELL above 50% |
-| `mtf_engine` | MTF Hierarchy | D1 bias → H1 structure confirmation → M5 entry trigger |
-
-Confluence scoring is fully configurable via `config.yaml` (see [Configuration Reference](#configuration-reference)).
-
----
-
-## Project Structure
-
-```
+```text
 ICT-/
 ├── python/
-│   ├── config.py                    # YAML loader – deep-merges defaults, never crashes
-│   ├── exceptions.py                # Typed exception hierarchy (DataSourceError, …)
-│   ├── main.py                      # Main scan loop orchestrator
-│   ├── data_engine/
-│   │   ├── mt5_connector.py         # MT5 OHLCV – persistent pooled connection
-│   │   ├── csv_loader.py            # CSV flat-file data source
-│   │   └── data_store.py            # LRU cache + SQLite snapshot persistence
-│   ├── strategy_engine/
-│   │   ├── util.py                  # Shared utilities (ATR)
-│   │   ├── market_structure.py      # Swing highs/lows, trend classification
-│   │   ├── bos_detector.py          # Break of Structure detection
-│   │   ├── liquidity_engine.py      # Equal levels + liquidity sweeps
-│   │   ├── fvg_detector.py          # Fair Value Gap detection + fill tracking
-│   │   ├── order_block_detector.py  # Order Block detection + mitigation tracking
-│   │   ├── premium_discount.py      # Fibonacci premium/discount model
-│   │   └── mtf_engine.py            # Multi-timeframe orchestrator + scoring
-│   ├── signal_generator/
-│   │   └── signal_generator.py      # Signal validation, spread-adjusted R:R, JSON output
-│   ├── integration/
-│   │   ├── file_bridge.py           # File-watcher integration bridge
-│   │   └── api_server.py            # Flask HTTP API (Gunicorn, rate-limited)
-│   ├── performance/
-│   │   └── tracker.py               # CSV trade log, stats, Telegram alerts
-│   └── ml/
-│       └── signal_filter.py         # Optional XGBoost signal confidence filter
-├── mql5/
-│   ├── ICT_EA.mq5                   # Expert Advisor – trade execution
-│   └── ICT_EA.mqh                   # EA helpers: risk, executor, logger, reader
-├── tests/                           # pytest test suite (73 tests)
-├── docs/
-│   ├── backtesting.md               # Strategy Tester guide
-│   └── deployment.md                # Kali Linux + Wine/MT5 deployment guide
-├── config.yaml                      # All runtime configuration
-├── requirements.txt                 # Python dependencies
-└── data/
-    └── csv/                         # Drop CSV data files here for csv source mode
+│   ├── main.py                     # live loop + backtest export mode
+│   ├── config.py                   # config loading/defaults + typed helpers
+│   ├── data_engine/                # MT5/CSV retrieval + cache/store
+│   ├── strategy_engine/            # ICT analysis modules
+│   ├── signal_generator/           # signal creation + atomic save/load
+│   ├── integration/                # HTTP API + feedback ingestion
+│   ├── performance/                # candidate/signal/execution tracking
+│   ├── ml/                         # ML scoring + publication policy
+│   └── backtest/                   # backtest signal export runner
+├── mql5/                           # MT5 EA sources
+├── tests/                          # pytest suite
+├── docs/                           # deployment/backtesting guides
+├── config.yaml                     # runtime configuration
+└── requirements.txt
 ```
 
 ---
 
-## Quick Start
+## Quick start
 
-### Prerequisites
-
-| Requirement | Version |
-|-------------|---------|
-| Python | 3.10+ |
-| MetaTrader 5 | Any (Windows or Wine) |
-| pip | 23+ |
-
-### 1. Install the Python engine
+### 1) Clone and create a virtualenv
 
 ```bash
-git clone https://github.com/dnlkilonzi-pixel/ICT-.git
+git clone https://github.com/DANIELKILONZI/ICT-.git
 cd ICT-
-
-# Create and activate a virtual environment
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+```
 
+### 2) Install dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+> Note: `MetaTrader5` Python package availability is platform-dependent. On many Linux environments it may not install directly; use CSV mode for engine testing, or run MT5-connected workflows on Windows/Wine setups.
+
+### 3) Configure
+
+Edit `config.yaml` and set at least:
+
+- `mt5.login`, `mt5.password`, `mt5.server` (if using MT5 data)
+- `symbols`
+- `data.source` (`mt5` or `csv`)
+- `integration.mode` (`file` or `http`)
+
+### 4) Run the engine
 
 ```bash
-# Edit the single config file – sensible defaults are pre-filled
-nano config.yaml
-```
-
-Minimum settings to change:
-
-```yaml
-mt5:
-  login: 123456          # your MT5 account number
-  password: "secret"
-  server: "Broker-Live"  # your broker's server name
-
-symbols:
-  - EURUSD
-  - GBPUSD
-
-data:
-  source: mt5            # mt5 | csv
-```
-
-### 3. Run
-
-```bash
-# File mode (default) – writes signals/latest_signal.json
-python -m python.main
-
-# HTTP mode – serves /signal on port 5000
-# Set integration.mode: http in config.yaml first
 python -m python.main
 ```
 
-### 4. Install the MT5 EA
-
-1. Copy `mql5/ICT_EA.mq5` and `mql5/ICT_EA.mqh` to your MT5 `Experts/` folder.
-2. Open MetaEditor, press **F7** to compile.
-3. Drag **ICT_EA** onto any chart (use the symbol you configured in `config.yaml`).
-4. Enable **Algo Trading** in MT5.
-5. In the EA inputs, point `InpSignalFile` at the path of `signals/latest_signal.json`, or set `InpSignalMode = 1` (HTTP) and point `InpHttpEndpoint` at the Python API.
-
-See [docs/deployment.md](docs/deployment.md) for the complete Kali Linux + Wine setup walkthrough.
-
 ---
 
-## Configuration Reference
+## Runtime modes
 
-`config.yaml` is the single source of truth. Every key has a safe default so the system never crashes on a missing value.
+### Live scan mode
 
-```yaml
-# ── MT5 connection ──────────────────────────────────────────────────────────
-mt5:
-  login: 0              # MT5 account number
-  password: ""
-  server: ""
+Default command:
 
-# ── Symbols and timeframes ──────────────────────────────────────────────────
-symbols: [EURUSD, GBPUSD, USDJPY, XAUUSD]
-timeframes:
-  macro:     D1         # bias timeframe
-  structure: H1         # structure timeframe
-  entry:     M5         # entry timeframe
-
-# ── Data source ─────────────────────────────────────────────────────────────
-data:
-  source: mt5           # mt5 | csv
-  csv_path: data/csv/
-  candle_history: 500
-
-# ── Strategy parameters ─────────────────────────────────────────────────────
-strategy:
-  atr_period: 14
-  atr_multiplier: 1.5   # displacement candle threshold
-  swing_lookback: 2
-  equal_level_pips: 3
-  ob_search_window: 10
-  disp_search_window: 6
-
-# ── Confluence scoring (weights must roughly sum to 1.0) ────────────────────
-scoring:
-  bias_alignment: 0.20
-  correct_zone: 0.15
-  wrong_zone_penalty: 0.30
-  h1_ob: 0.20
-  h1_fvg: 0.15
-  m5_sweep: 0.20
-  m5_fvg: 0.10
-  min_valid_score: 0.50
-
-# ── Risk management ─────────────────────────────────────────────────────────
-risk:
-  risk_percent: 1.0
-  max_daily_loss_percent: 3.0
-  max_trades_per_day: 5
-  max_spread_pips: 3.0
-  max_slippage_pips: 2.0
-
-# ── Signal quality ──────────────────────────────────────────────────────────
-signal:
-  min_confidence: 0.65
-  min_risk_reward: 2.0
-  spread_pips: 1.0      # cost-adjustment applied before R:R gate
-
-# ── Integration ─────────────────────────────────────────────────────────────
-integration:
-  mode: file            # file | http
-  http_port: 5000
-  http_workers: 2       # Gunicorn workers
-  signal_ttl_seconds: 300
-  api_key: ""           # non-empty → require X-API-Key header
-
-# ── Pip sizes (substring matched against symbol name) ───────────────────────
-pip_sizes:
-  default: 0.0001
-  JPY: 0.01
-  XAU: 0.10
-  XAG: 0.01
-
-# ── Optional Telegram notifications ─────────────────────────────────────────
-telegram:
-  enabled: false
-  bot_token: ""
-  chat_id: ""
-
-# ── Optional ML filter ───────────────────────────────────────────────────────
-ml:
-  enabled: false
-  model_path: ml/models/xgb_filter.pkl
-  confidence_threshold: 0.65
+```bash
+python -m python.main
 ```
 
----
+Behavior:
+- Enforces trading session windows (`risk.trading_hours`)
+- Applies portfolio guards:
+  - `daily_loss_reached()`
+  - `trades_today_count()`
+- Applies per-symbol duplicate guard:
+  - `has_open_trade(symbol)` unless `risk.allow_multiple_positions_per_symbol: true`
+- Publishes per-symbol signals
+- Ingests EA feedback files
+- Purges expired active signals from disk
 
-## Signal Format
+### Backtest export mode
 
-The engine emits one JSON file per cycle (`signals/latest_signal.json`) or serves it via HTTP. Both entry price and SL are **spread-adjusted** before output so the EA receives execution-ready levels.
-
-```json
-{
-  "symbol":             "EURUSD",
-  "direction":          "BUY",
-  "entry_type":         "LIMIT",
-  "entry_price":        1.08510,
-  "stop_loss":          1.08290,
-  "take_profit":        1.09000,
-  "risk_reward":        2.23,
-  "risk_reward_raw":    2.25,
-  "spread_pips":        1.0,
-  "risk_percent":       1.0,
-  "timeframe_alignment":"D1-H1-M5",
-  "setup_type":         "ICT_FVG_OB_SWEEP",
-  "confidence_score":   0.82,
-  "price_zone":         "DISCOUNT",
-  "d1_trend":           "BULLISH",
-  "h1_bos":             "BULLISH",
-  "reasons": [
-    "D1 bullish + H1 bullish BOS",
-    "Price in DISCOUNT zone",
-    "H1 OB at 1.08250-1.08380",
-    "H1 FVG at 1.08400-1.08550",
-    "M5 liquidity sweep confirmed"
-  ],
-  "timestamp": "2024-01-15T10:30:00+00:00"
-}
+```bash
+python -m python.main --backtest --from 2024-01-01 --to 2024-12-31 --symbol EURUSD
 ```
 
-> **`risk_reward`** is the spread-adjusted R:R used for the minimum threshold check.  
-> **`risk_reward_raw`** is the unadjusted figure for reference.  
-> A signal is only emitted when `risk_reward >= signal.min_risk_reward` (default 2.0).
+This exports historical signals for replay/testing workflows.
 
 ---
 
-## Integration Modes
+## Signal model and storage
+
+Signals are stored as **one file per symbol**:
+
+```text
+signals/active/{SYMBOL}.json
+```
+
+Example: `signals/active/EURUSD.json`
+
+Key fields include:
+- identity/lifecycle: `signal_id`, `created_at`, `expires_at`, `status`
+- execution: `symbol`, `direction`, `entry_type`, `entry_price`, `stop_loss`, `take_profit`
+- quality/context: `risk_reward`, `confidence_score`, `setup_type`, `reasons`
+- integrity: `payload_hash`
+- optional ML metadata: `ml_enabled`, `ml_score`, `ml_decision`, `ml_quality`, `ml_features`
+
+Signal writes are atomic (`tmp -> fsync -> os.replace`) to avoid partial reads by the EA.
+
+---
+
+## Integration options
 
 ### File mode (default)
 
-The Python engine writes `signals/latest_signal.json`. The MT5 EA reads this file on every tick. No network configuration required.
+Configure:
 
 ```yaml
 integration:
   mode: file
 ```
 
+The EA reads active signal JSON files from the configured path.
+
 ### HTTP mode
 
-The Python engine starts a Flask/Gunicorn HTTP API. The EA polls `GET /signal`. Supports API-key authentication and per-IP rate limiting.
+Configure:
 
 ```yaml
 integration:
   mode: http
+  http_host: "127.0.0.1"
   http_port: 5000
-  http_workers: 2
-  api_key: "change-me"   # optional; EA must send X-API-Key header
 ```
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Always returns `{"status": "ok"}` |
-| `/signal` | GET | Returns latest signal or 404 |
-| `/signal` | POST | Accept a signal from an external source |
+Endpoints:
+- `GET /health`
+- `GET /signal?symbol=EURUSD`
+- `POST /signal`
+
+Security controls supported by API server:
+- IP allowlist
+- API key (`X-API-Key`)
+- HMAC SHA-256 request signatures on POST (`X-Signature`)
+- nonce replay protection window
+- signal schema validation
 
 ---
 
-## MT5 Expert Advisor
+## MT5 EA integration
 
-`ICT_EA.mq5` is a complete, production-ready Expert Advisor. Key features:
+Core EA files:
+- `mql5/ICT_EA.mq5`
+- `mql5/ICT_EA.mqh`
+- `mql5/BrokerGuard.mqh`
 
-| Feature | Detail |
-|---------|--------|
-| **Signal source** | File (`signals/latest_signal.json`) or HTTP endpoint |
-| **Order types** | LIMIT and MARKET |
-| **Position sizing** | Fixed fractional risk (`risk_percent` of account equity) |
-| **Daily loss limit** | Stops trading when equity drawdown exceeds `max_daily_loss_percent` |
-| **Spread guard** | Skips execution when live spread > `max_spread_pips` |
-| **Session filter** | Restricts trading to London (08-17 UTC) and New York (13-22 UTC) |
-| **Duplicate prevention** | Will not open a second position on the same symbol/magic |
-| **Trade statistics** | `CTradeLogger` tracks wins/losses via `OnTradeTransaction`; summary prints on EA removal |
-| **Strategy Tester** | `InpEnableBacktest = true` generates simulated ICT signals in the Strategy Tester |
+EA capabilities include:
+- broker/tradeability validation via broker guard
+- spread/slippage/risk/session constraints
+- duplicate position prevention
+- feedback JSON writing to `signals/feedback/`
 
-### EA input parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `InpSignalFile` | `signals\latest_signal.json` | Path to signal JSON file |
-| `InpHttpEndpoint` | `http://127.0.0.1:5000/signal` | HTTP endpoint when mode = HTTP |
-| `InpSignalMode` | `0` | 0 = File, 1 = HTTP |
-| `InpRiskPercent` | `1.0` | Risk per trade (%) |
-| `InpMaxDailyLoss` | `3.0` | Maximum daily loss (%) |
-| `InpMaxTradesPerDay` | `5` | Trade cap per day |
-| `InpMaxSpreadPips` | `3.0` | Maximum allowed spread |
-| `InpMagicNumber` | `202401` | Unique EA identifier |
-| `InpEnableBacktest` | `true` | Use simulated signals in Strategy Tester |
+Backtest replay support is available via EA signal mode options.
 
 ---
 
-## ML Signal Filter
+## ML filter behavior
 
-An optional XGBoost filter sits between the strategy engine and signal output. When enabled, it scores each candidate signal and rejects those below a configurable threshold.
+ML evaluation is configurable under `ml` in `config.yaml`.
 
-```yaml
-ml:
-  enabled: true
-  model_path: ml/models/xgb_filter.pkl
-  confidence_threshold: 0.65
-```
-
-To train your own model, export `logs/performance.csv` after live or demo running and label outcomes. The filter expects the same feature set as `MTFAnalysis` (confluence score, price zone, trend direction, active components).
-
-> **When `ml.enabled = false`** (default) the filter is a no-op — all valid signals pass through.
+Current architecture:
+- ML is **advisory by design**
+- publication decision is made in signal policy
+- ML metadata is attached to the signal
+- ML does **not** mutate entry/SL/TP levels
 
 ---
 
-## Performance Tracking
+## Performance tracking
 
-Every emitted signal is appended to `logs/performance.csv` with columns:
+Tracking is layered:
+- **Layer 1:** `logs/candidates.csv` (valid setups)
+- **Layer 2:** `logs/signals.csv` (published signals)
+- **Layer 3:**
+  - `logs/executions.csv` (EA executed)
+  - `logs/rejections.csv` (EA rejected)
 
+Backward-compatible mirror:
+- `logs/performance.csv`
+
+Programmatic summary:
+
+```python
+from python.performance.tracker import statistics
+print(statistics())
 ```
-timestamp, symbol, direction, entry_price, stop_loss, take_profit,
-exit_price, result, pnl_pips, risk_percent, confidence_score, setup_type
-```
-
-Call `python.performance.tracker.statistics()` programmatically to get a live summary dict (total trades, win rate, expectancy, max drawdown). Telegram alerts can be sent on every new signal by enabling the `telegram` block in `config.yaml`.
 
 ---
 
 ## Testing
 
-```bash
-# Install dependencies (first time)
-pip install -r requirements.txt
+Run tests with:
 
-# Run the full test suite
+```bash
 python -m pytest tests/ -q
 ```
 
-The suite contains **73 tests** covering market structure, BOS/FVG/OB detection, signal generation (including spread-adjusted R:R), configuration loading, the HTTP API, and data store behaviour. All tests run without a live MT5 connection using CSV fixtures and mocks.
+The test suite covers strategy modules, signal generation/policy, tracker logic, and API security behavior.
 
 ---
 
-## Exception Hierarchy
+## Additional docs
 
-Custom exceptions in `python/exceptions.py` replace bare `except Exception` patterns:
-
-```
-ICTBaseError
-├── DataSourceError      – MT5 / CSV / SQLite fetch failure
-│                          attrs: symbol, timeframe, source
-├── SignalValidationError – malformed or incomplete signal dict
-│                          attrs: field, value
-└── RiskViolation        – risk-management guard triggered
-                           attrs: rule, actual, limit
-```
-
-Import and raise these in any new code instead of generic exceptions.
+- Backtesting guide: `docs/backtesting.md`
+- Deployment guide: `docs/deployment.md`
 
 ---
 
-## Contributing
+## Risk disclaimer
 
-1. Fork the repository and create a feature branch.
-2. Follow existing code style — type hints throughout, `from __future__ import annotations`, docstrings on public functions.
-3. Add or update tests in `tests/` for any new behaviour.
-4. Run `python -m pytest tests/ -q` — all tests must pass before opening a PR.
-5. Use `python/exceptions.py` for error signalling; never swallow exceptions silently.
-6. Shared numerical helpers belong in `python/strategy_engine/util.py`.
-
----
-
-## Risk Disclaimer
-
-> **This system is for educational and research purposes only.**
-> Forex and CFD trading carries a significant risk of loss and may not be suitable for all investors.
-> Always test thoroughly on a **demo account** before any live deployment.
-> Past performance does not guarantee future results.
-> The authors accept no liability for financial losses incurred through use of this software.
+This project is for education/research and system development purposes.
+Trading leveraged products carries significant risk.
+Always validate on demo/paper environments before any live deployment.
