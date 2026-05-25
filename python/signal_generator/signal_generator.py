@@ -9,6 +9,7 @@ Output format:
   "created_at": "2026-05-25T08:30:00Z",
   "expires_at": "2026-05-25T08:35:00Z",
   "valid_from": "2026-05-25T08:30:00Z",
+  "valid_to": "2026-05-25T08:35:00Z",
   "engine_cycle_id": "cycle-000381",
   "status": "ACTIVE",
   "symbol": "EURUSD",
@@ -17,6 +18,7 @@ Output format:
   "entry_price": 1.08500,
   "stop_loss": 1.08300,
   "take_profit": 1.09000,
+  "stop_loss_distance_pips": 20.0,
   "risk_percent": 1.0,
   "timeframe_alignment": "D1-H1-M5",
   "setup_type": "ICT_FVG_OB",
@@ -37,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
-from python.config import INTEGRATION, RISK, SIGNAL_CFG
+from python.config import INTEGRATION, RISK, SIGNAL_CFG, current_session_bounds
 from python.config import pip_size_for
 from python.exceptions import SignalValidationError
 from python.strategy_engine.mtf_engine import MTFAnalysis
@@ -242,12 +244,17 @@ def generate_signal(analysis: MTFAnalysis, cycle_id: str = "", ml_metadata: Opti
     )
     ttl = _signal_ttl()
     expires_at = now_utc + timedelta(seconds=ttl)
+    session_bounds = current_session_bounds(analysis.symbol, now_utc=now_utc)
+    session_valid_to = session_bounds[1] if session_bounds else expires_at
+    session_valid_to = min(session_valid_to, expires_at)
+    stop_loss_distance_pips = abs(adj_entry - adj_sl) / pip_size_for(analysis.symbol)
 
     signal = {
         "signal_id": signal_id,
         "created_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "expires_at": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "valid_from": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "valid_to": session_valid_to.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "engine_cycle_id": cycle_id,
         "status": "ACTIVE",
         "symbol": analysis.symbol,
@@ -259,6 +266,7 @@ def generate_signal(analysis: MTFAnalysis, cycle_id: str = "", ml_metadata: Opti
         "risk_reward": round(adj_rr, 2),
         "risk_reward_raw": round(raw_rr, 2),
         "spread_pips": _SPREAD_PIPS,
+        "stop_loss_distance_pips": round(stop_loss_distance_pips, 2),
         "risk_percent": _RISK_PERCENT,
         "timeframe_alignment": "D1-H1-M5",
         "setup_type": setup_type,

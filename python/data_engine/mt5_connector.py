@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import datetime
 from typing import Optional
 
@@ -23,6 +24,8 @@ from python.config import CONFIG
 from python.exceptions import DataSourceError
 
 logger = logging.getLogger(__name__)
+_MAX_FETCH_RETRIES = 3
+_FETCH_RETRY_DELAY_SEC = 1.0
 
 # Map string timeframe names to MT5 constants (populated lazily)
 _TF_MAP: dict[str, int] = {}
@@ -120,10 +123,24 @@ def fetch_ohlcv(
     if tf_const is None:
         raise ValueError(f"Unsupported timeframe: {timeframe}")
 
-    if utc_from:
-        rates = mt5.copy_rates_from(symbol, tf_const, utc_from, count)
-    else:
-        rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, count)
+    rates = None
+    for attempt in range(1, _MAX_FETCH_RETRIES + 1):
+        try:
+            if utc_from:
+                rates = mt5.copy_rates_from(symbol, tf_const, utc_from, count)
+            else:
+                rates = mt5.copy_rates_from_pos(symbol, tf_const, 0, count)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "MT5 copy_rates failed for %s %s (attempt %d/%d): %s",
+                symbol, timeframe, attempt, _MAX_FETCH_RETRIES, exc
+            )
+            rates = None
+
+        if rates is not None and len(rates) > 0:
+            break
+        if attempt < _MAX_FETCH_RETRIES:
+            time.sleep(_FETCH_RETRY_DELAY_SEC)
 
     if rates is None or len(rates) == 0:
         logger.warning("No data returned for %s %s", symbol, timeframe)
