@@ -73,6 +73,37 @@ def _validated_symbol(symbol: str) -> str:
     return clean
 
 
+def _safe_signal_path(symbol: str) -> Path:
+    """
+    Return the filesystem path for *symbol*'s active signal file.
+
+    The path is constructed so it is always confined to ``SIGNAL_ACTIVE_DIR``:
+
+    1. Unsafe characters are stripped via ``_validated_symbol()``.
+    2. ``os.path.basename()`` is applied to the result, removing any residual
+       directory separators (recognized sanitizer for CodeQL py/path-injection).
+    3. The resolved absolute path is verified to be a direct child of
+       ``SIGNAL_ACTIVE_DIR`` to defend against any symbolic-link attacks.
+
+    Raises ``SignalValidationError`` if the final path would escape the
+    signals directory.
+    """
+    from python.config import SIGNAL_ACTIVE_DIR
+
+    safe_sym = _validated_symbol(symbol)
+    # os.path.basename() strips any directory component (CodeQL sanitizer)
+    filename = os.path.basename(safe_sym) + ".json"
+    candidate = (SIGNAL_ACTIVE_DIR / filename).resolve()
+    expected_root = SIGNAL_ACTIVE_DIR.resolve()
+    if not str(candidate).startswith(str(expected_root) + os.sep) and \
+            candidate != expected_root:
+        raise SignalValidationError(
+            f"Resolved path {candidate!r} escapes the signals directory.",
+            field="symbol",
+        )
+    return candidate
+
+
 def _signal_ttl() -> int:
     """Return signal TTL in seconds from integration config."""
     return int(INTEGRATION.get("signal_ttl_seconds", 300))
@@ -307,7 +338,7 @@ def save_signal(signal: dict) -> None:
                 field=field,
             )
 
-    final_path = signal_path_for(_validated_symbol(signal["symbol"]))
+    final_path = _safe_signal_path(signal["symbol"])
     sanitized = _sanitize_signal(signal)
     payload = json.dumps(sanitized, indent=2)
 
@@ -346,7 +377,7 @@ def load_latest_signal(symbol: str) -> Optional[dict]:
         The trading symbol whose signal file should be read
         (e.g. ``"EURUSD"``).
     """
-    path = signal_path_for(_validated_symbol(symbol))
+    path = _safe_signal_path(symbol)
     if not path.exists():
         return None
     try:
