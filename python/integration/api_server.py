@@ -45,6 +45,9 @@ _NONCE_WINDOW: int = int(INTEGRATION.get("nonce_window_seconds", 300))
 _seen_nonces: dict[str, float] = {}
 _nonce_lock = threading.Lock()
 
+# Flask app – set to None when Flask is not installed; tests should skip.
+app = None
+
 # Required fields for POST /signal
 _REQUIRED_SIGNAL_FIELDS = {
     "symbol", "direction", "entry_price", "stop_loss", "take_profit",
