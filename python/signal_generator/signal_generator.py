@@ -77,31 +77,30 @@ def _safe_signal_path(symbol: str) -> Path:
     """
     Return the filesystem path for *symbol*'s active signal file.
 
-    The path is constructed so it is always confined to ``SIGNAL_ACTIVE_DIR``:
+    To avoid any path-injection risk, the return value is built exclusively
+    from pre-configured values in ``SYMBOLS`` (loaded from config.yaml), not
+    from the caller-supplied string.  The caller's *symbol* is only used as a
+    dictionary look-up key; the dict values come from the application config.
 
-    1. Unsafe characters are stripped via ``_validated_symbol()``.
-    2. ``os.path.basename()`` is applied to the result, removing any residual
-       directory separators (recognized sanitizer for CodeQL py/path-injection).
-    3. The resolved absolute path is verified to be a direct child of
-       ``SIGNAL_ACTIVE_DIR`` to defend against any symbolic-link attacks.
-
-    Raises ``SignalValidationError`` if the final path would escape the
-    signals directory.
+    Raises ``SignalValidationError`` if *symbol* (after stripping unsafe
+    characters) is not present in the configured symbols list.
     """
-    from python.config import SIGNAL_ACTIVE_DIR
+    from python.config import SIGNAL_ACTIVE_DIR, SYMBOLS
 
-    safe_sym = _validated_symbol(symbol)
-    # os.path.basename() strips any directory component (CodeQL sanitizer)
-    filename = os.path.basename(safe_sym) + ".json"
-    candidate = (SIGNAL_ACTIVE_DIR / filename).resolve()
-    expected_root = SIGNAL_ACTIVE_DIR.resolve()
-    if not str(candidate).startswith(str(expected_root) + os.sep) and \
-            candidate != expected_root:
+    clean = _validated_symbol(symbol)
+    # Build the map from config (not from user input) and look up.
+    # The returned path comes from config values, breaking the taint chain.
+    symbol_map: dict[str, Path] = {
+        s.upper(): SIGNAL_ACTIVE_DIR / f"{s.upper()}.json"
+        for s in SYMBOLS
+    }
+    path = symbol_map.get(clean)
+    if path is None:
         raise SignalValidationError(
-            f"Resolved path {candidate!r} escapes the signals directory.",
+            f"Symbol {symbol!r} is not in the configured symbols list.",
             field="symbol",
         )
-    return candidate
+    return path
 
 
 def _signal_ttl() -> int:
