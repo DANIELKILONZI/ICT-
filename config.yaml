@@ -100,6 +100,11 @@ risk:
     XAUUSD:
       london_open: "00:00"
       london_close: "23:59"
+  # Portfolio correlation groups – symbols in the same group share exposure limits
+  correlation_groups:
+    USD_MAJORS: [EURUSD, GBPUSD, USDJPY]
+    METALS: [XAUUSD]
+  max_correlated_exposure_percent: 2.0  # max aggregate risk % for one correlation group
 
 signal:
   min_confidence: 0.65        # minimum confidence score to emit signal
