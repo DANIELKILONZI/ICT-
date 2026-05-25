@@ -24,7 +24,7 @@ _DEFAULTS: dict[str, Any] = {
     "system": {
         "log_level": "INFO",
         "log_file": "logs/ict_system.log",
-        "signal_output_path": "signals/latest_signal.json",
+        "signal_output_path": "signals/active",
         "performance_log": "logs/performance.csv",
         "scan_interval_seconds": 60,
     },
@@ -196,7 +196,18 @@ def pip_size_for(symbol: str) -> float:
 
 
 SIGNAL_OUTPUT_PATH: Path = _ROOT / CONFIG["system"]["signal_output_path"]
-SIGNAL_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+SIGNAL_OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
+
+# Canonical active-signals directory.  One JSON file per symbol lives here.
+SIGNAL_ACTIVE_DIR: Path = SIGNAL_OUTPUT_PATH
+
+
+def signal_path_for(symbol: str) -> Path:
+    """Return the Path for *symbol*'s active signal file.
+
+    Example: signal_path_for("EURUSD") → .../signals/active/EURUSD.json
+    """
+    return SIGNAL_ACTIVE_DIR / f"{symbol}.json"
 
 LOG_FILE: Path = _ROOT / CONFIG["system"]["log_file"]
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)

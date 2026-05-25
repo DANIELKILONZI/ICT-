@@ -39,6 +39,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _RUNNING = True
+_cycle_counter: int = 0
 
 
 def _shutdown(signum, frame):
@@ -81,6 +82,10 @@ def _start_integration() -> None:
 
 def run_analysis_cycle() -> None:
     """Run one full cycle of MTF ICT analysis for all symbols."""
+    global _cycle_counter
+    _cycle_counter += 1
+    cycle_id = f"cycle-{_cycle_counter:06d}"
+
     if not _in_trading_session():
         logger.debug("Outside trading session – skipping analysis.")
         return
@@ -112,7 +117,7 @@ def run_analysis_cycle() -> None:
                 logger.info("%s: Signal filtered out by ML model.", symbol)
                 continue
 
-            signal = generate_signal(analysis)
+            signal = generate_signal(analysis, cycle_id=cycle_id)
             if signal:
                 save_signal(signal)
                 log_signal(signal)

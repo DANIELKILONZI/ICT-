@@ -73,7 +73,10 @@ try:
         if auth_err is not None:
             body, status = auth_err
             return jsonify(body), status
-        signal = load_latest_signal()
+        symbol = request.args.get("symbol", "").strip().upper()
+        if not symbol:
+            return jsonify({"error": "missing_symbol_param"}), 400
+        signal = load_latest_signal(symbol)
         if signal is None:
             return jsonify({"error": "no_active_signal"}), 404
         return jsonify(signal)

@@ -11,7 +11,7 @@
 #include "ICT_EA.mqh"
 
 //--- Input parameters
-input string   InpSignalFile      = "signals\\latest_signal.json"; // Signal JSON file path
+input string   InpSignalDir       = "signals\\active";  // Signal directory (one JSON per symbol)
 input string   InpHttpEndpoint    = "http://127.0.0.1:5000/signal"; // HTTP endpoint (if mode=http)
 input int      InpSignalMode      = 0;      // 0=File, 1=HTTP
 input double   InpRiskPercent     = 1.0;    // Risk per trade (%)
@@ -33,6 +33,7 @@ CTradeExecutor  g_executor;
 CTradeLogger    g_logger;
 
 datetime        g_lastSignalTime  = 0;
+string          g_lastSignalId    = "";   // prevents re-executing the same signal
 int             g_tradesToday     = 0;
 datetime        g_today           = 0;
 double          g_dailyStartEquity = 0;
@@ -46,7 +47,12 @@ int OnInit()
                InpMaxSpreadPips, InpMaxSlippagePips);
    g_executor.Init(InpMagicNumber, (int)(InpMaxSlippagePips * 10));
    g_logger.Init(InpMagicNumber);
-   g_reader.Init(InpSignalFile, InpHttpEndpoint, InpSignalMode);
+
+   // Construct per-symbol signal file path: signals\active\{SYMBOL}.json
+   string symbolFile = InpSignalDir + "\\" + _Symbol + ".json";
+   // HTTP mode: append ?symbol= query parameter
+   string httpUrl    = InpHttpEndpoint + "?symbol=" + _Symbol;
+   g_reader.Init(symbolFile, httpUrl, InpSignalMode);
 
    g_today             = iTime(_Symbol, PERIOD_D1, 0);
    g_dailyStartEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -144,8 +150,27 @@ void OnTick()
    if(!hasSignal)
       return;
 
-   // Validate signal timestamp to avoid re-trading
-   if(signal.timestamp <= g_lastSignalTime)
+   // ── Signal integrity checks ────────────────────────────────────────────
+
+   // Reject expired signals (expires_at enforced on the EA side)
+   if(signal.expiresAt > 0 && TimeCurrent() > signal.expiresAt)
+   {
+      static datetime lastExpiredLog = 0;
+      if(TimeCurrent() - lastExpiredLog > 60)
+      {
+         Print("Signal expired (id=", signal.signalId, " expires=",
+               TimeToString(signal.expiresAt, TIME_DATE|TIME_SECONDS), ") – skipping.");
+         lastExpiredLog = TimeCurrent();
+      }
+      return;
+   }
+
+   // Reject already-executed signal (deduplicate by signal_id)
+   if(signal.signalId != "" && signal.signalId == g_lastSignalId)
+      return;
+
+   // Validate signal timestamp to avoid re-trading (legacy fallback)
+   if(signal.signalId == "" && signal.timestamp <= g_lastSignalTime)
       return;
 
    // Validate symbol matches
@@ -186,10 +211,12 @@ void OnTick()
    if(executed)
    {
       g_lastSignalTime = signal.timestamp;
+      g_lastSignalId   = signal.signalId;
       g_tradesToday++;
       g_logger.LogTrade(signal, lotSize);
       Print("✅ Trade executed: ", signal.direction, " ", _Symbol,
-            " @ ", signal.entryPrice, " SL=", signal.stopLoss, " TP=", signal.takeProfit);
+            " @ ", signal.entryPrice, " SL=", signal.stopLoss, " TP=", signal.takeProfit,
+            " id=", signal.signalId);
    }
 }
 

@@ -25,10 +25,41 @@ double SymbolPipSize(string symbol)
 }
 
 //+------------------------------------------------------------------+
+//| Parse an ISO-8601 datetime string into an MQL5 datetime value.   |
+//|                                                                  |
+//| Handles formats produced by Python's datetime.strftime:          |
+//|   "2026-05-25T08:35:00Z"        (UTC with Z suffix)              |
+//|   "2026-05-25T08:35:00+00:00"   (UTC with offset)                |
+//|   "2026-05-25 08:35:00"         (MQL5-native, no separator)      |
+//|                                                                  |
+//| MQL5's StringToTime() accepts "YYYY.MM.DD HH:MM:SS" and          |
+//| "YYYY-MM-DD HH:MM:SS" but NOT the 'T' separator or 'Z' suffix.  |
+//+------------------------------------------------------------------+
+datetime ParseIsoDatetime(string s)
+{
+   // Replace 'T' separator with a space
+   StringReplace(s, "T", " ");
+   // Strip trailing 'Z'
+   int zPos = StringFind(s, "Z");
+   if(zPos > 0) s = StringSubstr(s, 0, zPos);
+   // Strip +HH:MM / -HH:MM timezone offset (safe for UTC signals)
+   int plusPos = StringFind(s, "+", 10);   // skip date part
+   if(plusPos > 0) s = StringSubstr(s, 0, plusPos);
+   int minusPos = StringFind(s, "-", 10);  // skip date part (YYYY-MM-DD already consumed)
+   // Only strip a trailing minus if it appears after position 16 (after "YYYY-MM-DD HH:MM")
+   if(minusPos > 16) s = StringSubstr(s, 0, minusPos);
+   return StringToTime(s);
+}
+
+//+------------------------------------------------------------------+
 //| Trade signal structure                                           |
 //+------------------------------------------------------------------+
 struct STradeSignal
 {
+   string   signalId;       // e.g. "EURUSD-20260525-083000-ICT_FVG_OB_SWEEP"
+   datetime createdAt;      // signal creation time (UTC)
+   datetime expiresAt;      // signal expiry time (UTC) – reject if now > expiresAt
+   string   status;         // "ACTIVE" expected; reject otherwise
    string   symbol;
    string   direction;      // "BUY" | "SELL"
    string   entryType;      // "LIMIT" | "MARKET"
@@ -103,6 +134,8 @@ private:
    {
       if(StringLen(json) < 10) return false;
 
+      signal.signalId   = ExtractJsonString(json, "signal_id");
+      signal.status     = ExtractJsonString(json, "status");
       signal.symbol     = ExtractJsonString(json, "symbol");
       signal.direction  = ExtractJsonString(json, "direction");
       signal.entryType  = ExtractJsonString(json, "entry_type");
@@ -113,11 +146,27 @@ private:
       signal.riskPercent= ExtractJsonDouble(json, "risk_percent");
       signal.confidence = ExtractJsonDouble(json, "confidence_score");
 
-      string tsStr = ExtractJsonString(json, "timestamp");
-      signal.timestamp  = StringToTime(tsStr);
+      string tsStr      = ExtractJsonString(json, "timestamp");
+      signal.timestamp  = ParseIsoDatetime(tsStr);
 
-      return (signal.symbol != "" && signal.direction != "" &&
-              signal.entryPrice > 0 && signal.stopLoss > 0 && signal.takeProfit > 0);
+      string createdStr = ExtractJsonString(json, "created_at");
+      signal.createdAt  = ParseIsoDatetime(createdStr);
+
+      string expiresStr = ExtractJsonString(json, "expires_at");
+      signal.expiresAt  = ParseIsoDatetime(expiresStr);
+
+      // Require all price fields and a known status
+      bool pricesOk = (signal.entryPrice > 0 &&
+                       signal.stopLoss   > 0 &&
+                       signal.takeProfit > 0 &&
+                       signal.symbol    != "" &&
+                       signal.direction != "");
+      if(!pricesOk) return false;
+
+      // Reject signals that are not marked ACTIVE
+      if(signal.status != "" && signal.status != "ACTIVE") return false;
+
+      return true;
    }
 
    string ExtractJsonString(string json, string key)
