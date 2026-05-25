@@ -20,16 +20,17 @@
 ### 3. Input Parameters for Backtesting
 | Parameter | Recommended Value |
 |-----------|------------------|
-| `InpEnableBacktest` | `true` |
+| `InpEnableSyntheticBacktest` | `true` |
 | `InpRiskPercent` | `1.0` |
 | `InpMaxDailyLoss` | `3.0` |
 | `InpMaxTradesPerDay` | `5` |
 | `InpMaxSpreadPips` | `3.0` |
 | `InpSignalMode` | `0` (file mode, irrelevant in tester) |
 
-When `InpEnableBacktest = true` and the EA detects it is running in the Strategy Tester,
+When `InpEnableSyntheticBacktest = true` and the EA detects it is running in the Strategy Tester,
 it switches to an **internal simulated signal generator** (`GenerateBacktestSignal`) instead
-of reading from the external Python system. This ensures fully self-contained backtesting.
+of reading from the external Python system. This mode is synthetic and does **not** test Python ICT logic.
+Use `InpSignalMode = 2` with Python-exported JSONL signals for real strategy replay in MT5.
 
 ### 4. Optimization
 Use the built-in **Genetic Algorithm** optimizer on:

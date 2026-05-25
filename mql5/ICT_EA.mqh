@@ -70,6 +70,7 @@ struct STradeSignal
    double   riskPercent;
    double   confidence;
    string   setupType;
+   string   payloadHash;
    datetime timestamp;
 };
 
@@ -141,6 +142,7 @@ private:
       signal.direction  = ExtractJsonString(json, "direction");
       signal.entryType  = ExtractJsonString(json, "entry_type");
       signal.setupType  = ExtractJsonString(json, "setup_type");
+      signal.payloadHash= ExtractJsonString(json, "payload_hash");
       signal.entryPrice = ExtractJsonDouble(json, "entry_price");
       signal.stopLoss   = ExtractJsonDouble(json, "stop_loss");
       signal.takeProfit = ExtractJsonDouble(json, "take_profit");
@@ -417,7 +419,11 @@ public:
                       string status,
                       string reason    = "",
                       double spreadPips = 0,
-                      string detail    = "")
+                      string detail    = "",
+                      double lots      = 0.0,
+                      double entryPrice= 0.0,
+                      double stopLoss  = 0.0,
+                      double takeProfit= 0.0)
    {
       // Build ISO-8601 timestamp from current GMT time
       MqlDateTime mdt;
@@ -438,11 +444,15 @@ public:
          "  \"status\": \"%s\",\n"
          "  \"reason\": \"%s\",\n"
          "  \"spread_pips\": %.2f,\n"
+         "  \"lots\": %.2f,\n"
+         "  \"entry_price\": %.5f,\n"
+         "  \"stop_loss\": %.5f,\n"
+         "  \"take_profit\": %.5f,\n"
          "  \"timestamp\": \"%s\",\n"
          "  \"detail\": \"%s\"\n"
          "}",
          signalId, symbol, direction, status, reason,
-         spreadPips, ts, detail);
+         spreadPips, lots, entryPrice, stopLoss, takeProfit, ts, detail);
 
       // Use a filename safe for Windows: replace colons in signal_id
       string safeName = signalId;
@@ -567,6 +577,7 @@ private:
       sig.direction  = _ExtStr(json, "direction");
       sig.entryType  = _ExtStr(json, "entry_type");
       sig.setupType  = _ExtStr(json, "setup_type");
+      sig.payloadHash= _ExtStr(json, "payload_hash");
       sig.entryPrice = _ExtDbl(json, "entry_price");
       sig.stopLoss   = _ExtDbl(json, "stop_loss");
       sig.takeProfit = _ExtDbl(json, "take_profit");

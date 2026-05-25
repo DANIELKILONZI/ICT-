@@ -26,7 +26,7 @@ input int      InpLondonCloseHour = 17;     // London session close (UTC)
 input int      InpNYOpenHour      = 13;     // New York session open (UTC)
 input int      InpNYCloseHour     = 22;     // New York session close (UTC)
 input int      InpMagicNumber     = 202401; // EA magic number
-input bool     InpEnableBacktest  = true;   // Generate simulated signals in Strategy Tester
+input bool     InpEnableSyntheticBacktest  = true;   // Synthetic tester mode only (not Python ICT logic)
 
 //--- Global state
 CSignalReader        g_reader;
@@ -156,7 +156,7 @@ void OnTick()
       datetime barTime = iTime(_Symbol, PERIOD_M5, 0);
       hasSignal = g_historicReader.ReadSignal(barTime, signal);
    }
-   else if(InpEnableBacktest && MQLInfoInteger(MQL_TESTER))
+   else if(InpEnableSyntheticBacktest && MQLInfoInteger(MQL_TESTER))
       hasSignal = GenerateBacktestSignal(signal);
    else
       hasSignal = g_reader.ReadSignal(signal);
@@ -222,7 +222,7 @@ void OnTick()
    }
 
    // ── Broker constraint validation (Issue 9) ──────────────────────────
-   if(!g_guard.Validate(_Symbol, signal.direction,
+   if(!g_guard.Validate(_Symbol, signal.direction, signal.entryType,
                         signal.entryPrice, signal.stopLoss, signal.takeProfit,
                         lotSize))
    {
@@ -260,7 +260,8 @@ void OnTick()
       g_logger.LogTrade(signal, lotSize);
       // Write execution feedback so Python can reconcile Layer 3
       g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
-                             "EXECUTED", "", 0, "");
+                             "EXECUTED", "", 0, "",
+                             lotSize, signal.entryPrice, signal.stopLoss, signal.takeProfit);
       Print("✅ Trade executed: ", signal.direction, " ", _Symbol,
             " @ ", signal.entryPrice, " SL=", signal.stopLoss, " TP=", signal.takeProfit,
             " id=", signal.signalId);
@@ -288,6 +289,8 @@ bool IsInTradingSession()
 
 //+------------------------------------------------------------------+
 //| Simulated signal generation for Strategy Tester                  |
+//| WARNING: Synthetic mode does NOT test Python ICT logic.          |
+//| Use InpSignalMode=2 for real Python-exported signal replay.      |
 //+------------------------------------------------------------------+
 bool GenerateBacktestSignal(STradeSignal &signal)
 {
