@@ -1,25 +1,39 @@
 # ICT Multi-Timeframe Trading System
 
-A modular ICT-inspired algorithmic trading system with:
-- a **Python analysis engine** (signal generation, policy, risk gates, logging)
-- a **MetaTrader 5 EA** (execution, broker/runtime checks, execution feedback)
+A professional, modular, ICT-inspired algorithmic trading framework that combines:
 
-The Python side and EA are decoupled through file or HTTP integration.
+- A **Python analysis engine** for market analysis, signal generation, policy, risk gates, and performance tracking
+- A **MetaTrader 5 Expert Advisor (EA)** for broker-aware execution and structured execution feedback
 
----
-
-## What this project does
-
-- Runs multi-timeframe analysis (D1 → H1 → M5)
-- Detects ICT-style structure and confluence (BOS, FVG, OB, liquidity, premium/discount)
-- Generates execution-ready signals with TTL and payload hash metadata
-- Applies Python-side risk guards before publishing
-- Supports optional ML scoring (advisory policy mode)
-- Tracks candidates, published signals, and EA execution/rejection feedback
+The analysis and execution layers are decoupled through **file-based** or **HTTP-based** integration.
 
 ---
 
-## High-level architecture
+## Executive Overview
+
+This project is designed to support disciplined, rule-based trading workflows with clear separation of concerns:
+
+1. Market data collection and multi-timeframe analysis
+2. Strategy-driven signal generation
+3. Risk and policy validation (including optional ML advisory scoring)
+4. Reliable signal publishing and EA-side execution controls
+5. Full feedback and performance logging for continuous evaluation
+
+---
+
+## Core Capabilities
+
+- Multi-timeframe workflow (D1 → H1 → M5)
+- ICT-style confluence analysis (BOS, FVG, OB, liquidity, premium/discount)
+- Execution-ready signals with lifecycle metadata and payload hashing
+- Python-side pre-publication risk controls
+- Optional ML scoring in **advisory mode**
+- File and HTTP integration support
+- EA feedback ingestion and layered performance reporting
+
+---
+
+## High-Level Architecture
 
 ```text
 Data Engine (MT5/CSV + cache)
@@ -39,32 +53,32 @@ Performance tracker logs/statistics
 
 ---
 
-## Repository structure
+## Repository Structure
 
 ```text
 ICT-/
 ├── python/
-│   ├── main.py                     # live loop + backtest export mode
-│   ├── config.py                   # config loading/defaults + typed helpers
-│   ├── data_engine/                # MT5/CSV retrieval + cache/store
-│   ├── strategy_engine/            # ICT analysis modules
-│   ├── signal_generator/           # signal creation + atomic save/load
-│   ├── integration/                # HTTP API + feedback ingestion
-│   ├── performance/                # candidate/signal/execution tracking
-│   ├── ml/                         # ML scoring + publication policy
-│   └── backtest/                   # backtest signal export runner
-├── mql5/                           # MT5 EA sources
-├── tests/                          # pytest suite
-├── docs/                           # deployment/backtesting guides
-├── config.yaml                     # runtime configuration
+│   ├── main.py
+│   ├── config.py
+│   ├── data_engine/
+│   ├── strategy_engine/
+│   ├── signal_generator/
+│   ├── integration/
+│   ├── performance/
+│   ├── ml/
+│   └── backtest/
+├── mql5/
+├── tests/
+├── docs/
+├── config.yaml
 └── requirements.txt
 ```
 
 ---
 
-## Quick start
+## Quick Start
 
-### 1) Clone and create a virtualenv
+### 1) Clone and create a virtual environment
 
 ```bash
 git clone https://github.com/DANIELKILONZI/ICT-.git
@@ -79,13 +93,13 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-> Note: `MetaTrader5` Python package availability is platform-dependent. On many Linux environments it may not install directly; use CSV mode for engine testing, or run MT5-connected workflows on Windows/Wine setups.
+> Note: `MetaTrader5` package availability depends on platform/environment. For environments where it is unavailable, CSV mode can still be used for non-live testing flows.
 
-### 3) Configure
+### 3) Configure runtime settings
 
-Edit `config.yaml` and set at least:
+Update `config.yaml` at minimum:
 
-- `mt5.login`, `mt5.password`, `mt5.server` (if using MT5 data)
+- `mt5.login`, `mt5.password`, `mt5.server` (for MT5 mode)
 - `symbols`
 - `data.source` (`mt5` or `csv`)
 - `integration.mode` (`file` or `http`)
@@ -98,76 +112,50 @@ python -m python.main
 
 ---
 
-## Runtime modes
+## Runtime Modes
 
-### Live scan mode
-
-Default command:
+### Live Scan Mode
 
 ```bash
 python -m python.main
 ```
 
-Behavior:
-- Enforces trading session windows (`risk.trading_hours`)
-- Applies portfolio guards:
-  - `daily_loss_reached()`
-  - `trades_today_count()`
-- Python guards are advisory/pre-publication checks.
-- MT5 EA is the final risk authority for equity, margin, spread, and broker/runtime constraints.
-- Applies per-symbol duplicate guard:
-  - `has_open_trade(symbol)` unless `risk.allow_multiple_positions_per_symbol: true`
-- Publishes per-symbol signals
-- Ingests EA feedback files
-- Purges expired active signals from disk
-
-### Backtest export mode
+### Backtest Export Mode
 
 ```bash
 python -m python.main --backtest --from 2024-01-01 --to 2024-12-31 --symbol EURUSD
 ```
 
-This exports historical signals for replay/testing workflows.
-
 ---
 
-## Signal model and storage
+## Signal Storage Model
 
-Signals are stored as **one file per symbol**:
+Signals are stored one-per-symbol at:
 
 ```text
 signals/active/{SYMBOL}.json
 ```
 
-Example: `signals/active/EURUSD.json`
+Example:
 
-Key fields include:
-- identity/lifecycle: `signal_id`, `created_at`, `expires_at`, `status`
-- execution: `symbol`, `direction`, `entry_type`, `entry_price`, `stop_loss`, `take_profit`
-- quality/context: `risk_reward`, `confidence_score`, `setup_type`, `reasons`
-- integrity metadata: `payload_hash`
-- optional ML metadata: `ml_enabled`, `ml_score`, `ml_decision`, `ml_quality`, `ml_features`
+```text
+signals/active/EURUSD.json
+```
 
-Signal writes are atomic (`tmp -> fsync -> os.replace`) to avoid partial reads by the EA.
+Signal payloads include identity, execution parameters, lifecycle timestamps, confidence/risk metrics, and integrity metadata.
 
 ---
 
-## Integration options
+## Integration Options
 
-### File mode (default)
-
-Configure:
+### File Mode
 
 ```yaml
 integration:
   mode: file
 ```
 
-The EA reads active signal JSON files from the configured path.
-
-### HTTP mode
-
-Configure:
+### HTTP Mode
 
 ```yaml
 integration:
@@ -176,91 +164,86 @@ integration:
   http_port: 5000
 ```
 
-Endpoints:
+Supported endpoints:
+
 - `GET /health`
 - `GET /signal?symbol=EURUSD`
 - `POST /signal`
 
-Security controls supported by API server:
-- IP allowlist
-- API key (`X-API-Key`)
-- HMAC SHA-256 request signatures on POST (`X-Signature`)
-- nonce replay protection window
-- signal schema validation
+---
+
+## Security Controls (HTTP)
+
+- IP allowlist support
+- API key enforcement (`X-API-Key`)
+- HMAC-SHA256 request signature support (`X-Signature`)
+- Nonce replay protection window
+- Signal schema validation
 
 ---
 
-## MT5 EA integration
+## MT5 EA Integration
 
-Core EA files:
+Primary EA files:
+
 - `mql5/ICT_EA.mq5`
 - `mql5/ICT_EA.mqh`
 - `mql5/BrokerGuard.mqh`
 
-EA capabilities include:
-- broker/tradeability validation via broker guard
-- spread/slippage/risk/session constraints
-- duplicate position prevention
-- feedback JSON writing to `signals/feedback/`
-
-Backtest replay support is available via EA signal mode options.
+EA responsibilities include tradeability checks, runtime constraints, and feedback file generation to `signals/feedback/`.
 
 ---
 
-## ML filter behavior
+## ML Filter Behavior
 
-ML evaluation is configurable under `ml` in `config.yaml`.
+ML configuration is managed under the `ml` section in `config.yaml`.
 
-Current architecture:
-- ML is **advisory by design**
-- publication decision is made in signal policy
-- ML metadata is attached to the signal
-- ML does **not** mutate entry/SL/TP levels
+Current behavior:
+
+- ML is advisory by design
+- Publication decisions are made by signal policy
+- ML metadata is attached to signal payloads
+- Entry/SL/TP values are not altered by ML logic
 
 ---
 
-## Performance tracking
+## Performance Tracking
 
-Tracking is layered:
-- **Layer 1:** `logs/candidates.csv` (valid setups)
-- **Layer 2:** `logs/signals.csv` (published signals)
-- **Layer 3:**
-  - `logs/executions.csv` (EA executed)
-  - `logs/rejections.csv` (EA rejected)
+Layered logging outputs:
 
-Backward-compatible mirror:
-- `logs/performance.csv`
-
-Programmatic summary:
-
-```python
-from python.performance.tracker import statistics
-print(statistics())
-```
+- `logs/candidates.csv`
+- `logs/signals.csv`
+- `logs/executions.csv`
+- `logs/rejections.csv`
+- `logs/performance.csv` (compatibility mirror)
 
 ---
 
 ## Testing
 
-Run tests with:
-
 ```bash
 python -m pytest tests/ -q
 ```
 
-The test suite covers strategy modules, signal generation/policy, tracker logic, and API security behavior.
+---
+
+## Documentation
+
+- `docs/backtesting.md`
+- `docs/deployment.md`
 
 ---
 
-## Additional docs
+## Author & Project Credit
 
-- Backtesting guide: `docs/backtesting.md`
-- Deployment guide: `docs/deployment.md`
+**All project credit belongs to @DANIELKILONZI.**
+
+This repository, including its architecture, implementation direction, and overall system design, is fully credited to **Daniel Kilonzi**.
 
 ---
 
-## Risk disclaimer
+## Risk Disclaimer
 
-This project is for education/research and system development purposes.
-Trading leveraged products carries significant risk.
-Always validate on demo/paper environments before any live deployment.
+This system is for research, development, and educational use.
+Trading leveraged instruments carries substantial risk.
+Always validate in demo/paper environments before any live deployment.
