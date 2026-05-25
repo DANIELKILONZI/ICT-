@@ -28,7 +28,15 @@ from python.data_engine.data_store import get_ohlcv
 from python.integration.execution_feedback import ingest_pending as ingest_ea_feedback
 from python.ml.signal_filter import ml_evaluate
 from python.ml.signal_policy import build_signal_ml_metadata, should_publish
-from python.performance.tracker import log_candidate, log_signal, notify_signal, statistics
+from python.performance.tracker import (
+    daily_loss_reached,
+    has_open_trade,
+    log_candidate,
+    log_signal,
+    notify_signal,
+    statistics,
+    trades_today_count,
+)
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
 
@@ -68,6 +76,29 @@ def _in_trading_session() -> bool:
     return london or ny
 
 
+# ── Stale signal cleanup ──────────────────────────────────────────────────────
+
+def _purge_expired_signals() -> None:
+    """
+    Remove signal files from signals/active/ whose expires_at has passed.
+
+    This prevents the EA from reading stale signals and ensures disk state
+    accurately reflects current system intent.
+    """
+    from python.config import SIGNAL_ACTIVE_DIR
+    from python.signal_generator.signal_generator import load_latest_signal
+
+    for path in SIGNAL_ACTIVE_DIR.glob("*.json"):
+        symbol = path.stem  # e.g. "EURUSD"
+        # load_latest_signal returns None if the signal has expired
+        if load_latest_signal(symbol) is None and path.exists():
+            try:
+                path.unlink()
+                logger.debug("Purged expired signal file: %s", path.name)
+            except OSError as exc:
+                logger.warning("Could not purge %s: %s", path.name, exc)
+
+
 # ── Integration startup ───────────────────────────────────────────────────────
 
 def _start_integration() -> None:
@@ -95,13 +126,29 @@ def run_analysis_cycle() -> None:
         logger.debug("Outside trading session – skipping analysis.")
         return
 
+    # ── Portfolio-level risk guards ────────────────────────────────────────
+    if daily_loss_reached():
+        logger.info("Daily loss limit reached – no new signals this cycle.")
+        return
+
+    max_trades = CONFIG["risk"].get("max_trades_per_day", 5)
+    if trades_today_count() >= max_trades:
+        logger.info("Max trades per day (%d) reached – no new signals.", max_trades)
+        return
+
     tf_macro = TIMEFRAMES.get("macro", "D1")
     tf_struct = TIMEFRAMES.get("structure", "H1")
     tf_entry = TIMEFRAMES.get("entry", "M5")
     count = CONFIG["data"].get("candle_history", 500)
+    allow_multiple = CONFIG["risk"].get("allow_multiple_positions_per_symbol", False)
 
     for symbol in SYMBOLS:
         try:
+            # ── Per-symbol risk gate ───────────────────────────────────────
+            if not allow_multiple and has_open_trade(symbol):
+                logger.debug("%s: Open trade exists – skipping.", symbol)
+                continue
+
             df_d1 = get_ohlcv(symbol, tf_macro, count)
             df_h1 = get_ohlcv(symbol, tf_struct, count)
             df_m5 = get_ohlcv(symbol, tf_entry, count)
@@ -129,10 +176,13 @@ def run_analysis_cycle() -> None:
             hour_utc = datetime.now(timezone.utc).hour
             ml_result = ml_evaluate(analysis, hour_utc=hour_utc)
 
+            # Risk gate: verified above (daily loss OK, trade count OK, no duplicate)
+            risk_gate_passed = True
+
             # Signal policy decides whether to publish
             publish, policy_reason = should_publish(
                 ict_valid=True,  # already confirmed by analysis.valid
-                risk_gate_passed=True,  # risk guards checked earlier in cycle
+                risk_gate_passed=risk_gate_passed,
                 ml_result=ml_result,
             )
             if not publish:
@@ -158,6 +208,9 @@ def run_analysis_cycle() -> None:
         ingest_ea_feedback()
     except Exception as exc:  # noqa: BLE001
         logger.warning("EA feedback ingestion failed: %s", exc)
+
+    # Purge expired signal files from disk
+    _purge_expired_signals()
 
 
 def main() -> None:

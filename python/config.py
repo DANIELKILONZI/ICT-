@@ -81,6 +81,7 @@ _DEFAULTS: dict[str, Any] = {
         "max_trades_per_day": 5,
         "max_spread_pips": 3.0,
         "max_slippage_pips": 2.0,
+        "allow_multiple_positions_per_symbol": False,
         "trading_hours": {
             "london_open": 8,
             "london_close": 17,

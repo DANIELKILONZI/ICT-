@@ -35,6 +35,91 @@ logger = logging.getLogger(__name__)
 
 _csv_lock = threading.Lock()
 
+
+# ── Risk guard helpers ────────────────────────────────────────────────────────
+
+def has_open_trade(symbol: str) -> bool:
+    """
+    Return True if *symbol* has at least one signal marked OPEN in signals.csv.
+
+    This allows the Python engine to avoid publishing duplicate signals for a
+    symbol that already has an active trade on the EA side (the EA also checks
+    this, but filtering here reduces noise and unnecessary file writes).
+    """
+    path = SIGNALS_LOG if SIGNALS_LOG.exists() else PERF_LOG
+    if not path.exists():
+        return False
+    with _csv_lock:
+        with open(path, "r", newline="") as fh:
+            for row in csv.DictReader(fh):
+                if row.get("symbol") == symbol and row.get("result") == "OPEN":
+                    return True
+    return False
+
+
+def daily_loss_reached() -> bool:
+    """
+    Return True if today's closed-trade losses have exceeded the configured
+    ``risk.max_daily_loss_percent`` threshold.
+
+    The calculation sums all pnl_pips for today's closed trades (WIN+LOSS)
+    and compares the net result against the threshold.  Because Python does
+    not have access to the actual equity curve, we use a simplified approach:
+    if the net loss in pips today exceeds a proxy limit derived from config.
+    """
+    from python.config import RISK
+
+    max_loss_pct = RISK.get("max_daily_loss_percent", 3.0)
+    # Proxy: each 1% of risk ~ roughly 100 pips net movement
+    # This is a conservative heuristic; the EA has the real equity check.
+    max_loss_pips = max_loss_pct * 100
+
+    path = SIGNALS_LOG if SIGNALS_LOG.exists() else PERF_LOG
+    if not path.exists():
+        return False
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    net_pips = 0.0
+
+    with _csv_lock:
+        with open(path, "r", newline="") as fh:
+            for row in csv.DictReader(fh):
+                ts = row.get("timestamp", "")
+                if not ts.startswith(today_str):
+                    continue
+                if row.get("result") not in ("WIN", "LOSS"):
+                    continue
+                try:
+                    net_pips += float(row["pnl_pips"])
+                except (ValueError, KeyError):
+                    pass
+
+    return net_pips < -max_loss_pips
+
+
+def trades_today_count() -> int:
+    """
+    Return the number of signals published (OPEN, WIN, LOSS, EXECUTED) today.
+
+    Used to enforce ``risk.max_trades_per_day`` on the Python side before
+    publishing additional signals.
+    """
+    path = SIGNALS_LOG if SIGNALS_LOG.exists() else PERF_LOG
+    if not path.exists():
+        return 0
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    count = 0
+
+    with _csv_lock:
+        with open(path, "r", newline="") as fh:
+            for row in csv.DictReader(fh):
+                ts = row.get("timestamp", "")
+                if ts.startswith(today_str):
+                    count += 1
+    return count
+
+
 # ── Column schemas ────────────────────────────────────────────────────────────
 
 _SIGNAL_HEADERS = [
