@@ -170,7 +170,7 @@ def _spread_adjusted_rr(
     return adj_entry, adj_sl, adj_tp, adj_rr
 
 
-def generate_signal(analysis: MTFAnalysis, cycle_id: str = "") -> Optional[dict]:
+def generate_signal(analysis: MTFAnalysis, cycle_id: str = "", ml_metadata: Optional[dict] = None) -> Optional[dict]:
     """
     Convert an MTFAnalysis into a trade signal dict.
     Returns None if conditions are not met.
@@ -182,6 +182,10 @@ def generate_signal(analysis: MTFAnalysis, cycle_id: str = "") -> Optional[dict]
     cycle_id:
         Opaque identifier for the engine cycle that produced this signal.
         Used for traceability (e.g. "cycle-000381").
+    ml_metadata:
+        Optional dict of ML advisory metadata to embed in the signal.
+        Should contain keys: ict_valid, ml_enabled, ml_score, ml_decision,
+        ml_quality, ml_features.  The ML layer NEVER mutates entry/SL/TP.
     """
     if not analysis.valid:
         logger.debug(
@@ -264,6 +268,23 @@ def generate_signal(analysis: MTFAnalysis, cycle_id: str = "") -> Optional[dict]
         "reasons": analysis.reasons,
         "timestamp": now_utc.isoformat(),
     }
+
+    # Embed ML advisory metadata (never mutates entry/SL/TP)
+    if ml_metadata:
+        signal["ict_valid"] = ml_metadata.get("ict_valid", True)
+        signal["ml_enabled"] = ml_metadata.get("ml_enabled", False)
+        signal["ml_score"] = ml_metadata.get("ml_score", -1.0)
+        signal["ml_decision"] = ml_metadata.get("ml_decision", "DISABLED")
+        signal["ml_quality"] = ml_metadata.get("ml_quality", "UNKNOWN")
+        signal["ml_features"] = ml_metadata.get("ml_features", {})
+    else:
+        signal["ict_valid"] = True
+        signal["ml_enabled"] = False
+        signal["ml_score"] = -1.0
+        signal["ml_decision"] = "DISABLED"
+        signal["ml_quality"] = "UNKNOWN"
+        signal["ml_features"] = {}
+
     signal["payload_hash"] = _compute_payload_hash(signal)
 
     logger.info(

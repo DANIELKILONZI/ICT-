@@ -28,7 +28,8 @@ import yaml
 from python.config import CONFIG, SYMBOLS, TIMEFRAMES
 from python.data_engine.data_store import get_ohlcv, refresh
 from python.integration.execution_feedback import ingest_pending as ingest_ea_feedback
-from python.ml.signal_filter import passes_ml_filter
+from python.ml.signal_filter import ml_evaluate, passes_ml_filter
+from python.ml.signal_policy import build_signal_ml_metadata, should_publish
 from python.performance.tracker import log_candidate, log_signal, notify_signal, statistics
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
@@ -126,13 +127,24 @@ def run_analysis_cycle() -> None:
                 reasons=analysis.reasons,
             )
 
-            # Optional ML filter
+            # ML evaluation (advisory – never mutates entry/SL/TP)
             hour_utc = datetime.now(timezone.utc).hour
-            if not passes_ml_filter(analysis, hour_utc=hour_utc):
-                logger.info("%s: Signal filtered out by ML model.", symbol)
+            ml_result = ml_evaluate(analysis, hour_utc=hour_utc)
+
+            # Signal policy decides whether to publish
+            publish, policy_reason = should_publish(
+                ict_valid=True,  # already confirmed by analysis.valid
+                risk_gate_passed=True,  # risk guards checked earlier in cycle
+                ml_result=ml_result,
+            )
+            if not publish:
+                logger.info("%s: Signal not published – %s", symbol, policy_reason)
                 continue
 
-            signal = generate_signal(analysis, cycle_id=cycle_id)
+            # Build ML metadata to embed in the signal
+            ml_metadata = build_signal_ml_metadata(ml_result, ict_valid=True)
+
+            signal = generate_signal(analysis, cycle_id=cycle_id, ml_metadata=ml_metadata)
             if signal:
                 save_signal(signal)
                 # Layer 2 – record the published signal

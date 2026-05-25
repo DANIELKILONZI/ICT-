@@ -97,8 +97,12 @@ signal:
 
 ml:
   enabled: false
+  mode: advisory              # "advisory" (recommended) | "gate" (legacy boolean filter)
   model_path: ml/models/xgb_filter.pkl
   confidence_threshold: 0.65
+  high_confidence_threshold: 0.80   # score >= this → quality=HIGH
+  publish_min_quality: LOW    # minimum ML quality to publish: LOW | MEDIUM | HIGH
+  unavailable_action: publish # "publish" (fail-open) | "block" (fail-closed) when model missing
 
 integration:
   mode: file            # file | http | socket

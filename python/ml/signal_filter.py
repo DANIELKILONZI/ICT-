@@ -124,6 +124,10 @@ def passes_ml_filter(
     If the model is unavailable the filter fails **closed** (returns False) so
     that broken or missing model files never silently pass all signals through.
     Set `ml.enabled: false` in config.yaml to disable ML filtering entirely.
+
+    .. deprecated::
+        Use :func:`ml_evaluate` for the advisory pattern which returns full
+        explainability metadata instead of a binary gate decision.
     """
     if not ML_CFG.get("enabled", False):
         return True  # ML disabled → pass everything
@@ -136,6 +140,85 @@ def passes_ml_filter(
     if not result:
         logger.debug("ML filter rejected signal (prob=%.3f < threshold=%.2f)", prob, thr)
     return result
+
+
+# ── Advisory ML evaluation (replaces boolean gate) ────────────────────────────
+
+def ml_evaluate(
+    analysis: MTFAnalysis,
+    atr_m5: float = 0.0,
+    hour_utc: int = 12,
+    spread_pips: float = 0.0,
+) -> dict:
+    """
+    Evaluate the ML model in *advisory* mode and return a structured dict
+    with full explainability.  The ML model never silently mutates entry/SL/TP.
+
+    Returns
+    -------
+    dict with keys:
+        ml_enabled (bool): Whether ML is configured and active.
+        ml_score (float): Raw probability from the model (-1.0 if unavailable).
+        ml_decision (str): "APPROVED" | "FILTERED" | "UNAVAILABLE" | "DISABLED".
+        ml_quality (str): "HIGH" | "MEDIUM" | "LOW" derived from score bands.
+        ml_features (dict): The feature values that were fed to the model.
+    """
+    enabled = ML_CFG.get("enabled", False)
+
+    if not enabled:
+        return {
+            "ml_enabled": False,
+            "ml_score": -1.0,
+            "ml_decision": "DISABLED",
+            "ml_quality": "UNKNOWN",
+            "ml_features": {},
+        }
+
+    score = ml_confidence(analysis, atr_m5, hour_utc)
+
+    # Build the human-readable feature dict for explainability
+    features = {
+        "confluence_score": round(analysis.confluence_score, 4),
+        "session_hour_utc": hour_utc,
+        "spread_pips": round(spread_pips, 2),
+        "d1_trend": str(analysis.d1_trend.value),
+        "h1_trend": str(analysis.h1_trend.value),
+        "price_zone": analysis.price_zone,
+        "m5_sweep_present": analysis.m5_sweep is not None,
+        "h1_ob_present": analysis.h1_ob is not None,
+        "h1_fvg_present": analysis.h1_fvg is not None,
+        "m5_fvg_present": analysis.m5_fvg is not None,
+        "atr_m5": round(atr_m5, 6),
+    }
+
+    if score < 0:
+        decision = "UNAVAILABLE"
+        quality = "UNKNOWN"
+        logger.warning("ML model unavailable – advisory result: UNAVAILABLE")
+    else:
+        threshold = _THRESHOLD
+        high_threshold = ML_CFG.get("high_confidence_threshold", 0.80)
+
+        if score >= high_threshold:
+            quality = "HIGH"
+        elif score >= threshold:
+            quality = "MEDIUM"
+        else:
+            quality = "LOW"
+
+        decision = "APPROVED" if score >= threshold else "FILTERED"
+        logger.info(
+            "ML advisory: score=%.3f decision=%s quality=%s",
+            score, decision, quality,
+        )
+
+    return {
+        "ml_enabled": True,
+        "ml_score": round(score, 4) if score >= 0 else -1.0,
+        "ml_decision": decision,
+        "ml_quality": quality,
+        "ml_features": features,
+    }
 
 
 # ── Training helper ──────────────────────────────────────────────────────────
