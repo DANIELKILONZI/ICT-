@@ -23,12 +23,10 @@ import threading
 import time
 from datetime import datetime, timezone
 
-import yaml
-
 from python.config import CONFIG, SYMBOLS, TIMEFRAMES
-from python.data_engine.data_store import get_ohlcv, refresh
+from python.data_engine.data_store import get_ohlcv
 from python.integration.execution_feedback import ingest_pending as ingest_ea_feedback
-from python.ml.signal_filter import ml_evaluate, passes_ml_filter
+from python.ml.signal_filter import ml_evaluate
 from python.ml.signal_policy import build_signal_ml_metadata, should_publish
 from python.performance.tracker import log_candidate, log_signal, notify_signal, statistics
 from python.signal_generator.signal_generator import generate_signal, save_signal

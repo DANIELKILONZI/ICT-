@@ -34,9 +34,10 @@ import os
 import re
 import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Optional
 
-from python.config import INTEGRATION, RISK, SIGNAL_CFG, signal_path_for
+from python.config import INTEGRATION, RISK, SIGNAL_CFG
 from python.config import pip_size_for
 from python.exceptions import SignalValidationError
 from python.strategy_engine.mtf_engine import MTFAnalysis

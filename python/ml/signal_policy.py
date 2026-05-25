@@ -21,7 +21,6 @@ Configuration keys (config.yaml → ml section):
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from python.config import ML_CFG
 

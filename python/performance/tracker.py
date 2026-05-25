@@ -20,7 +20,6 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from python.config import (
     CANDIDATES_LOG,
