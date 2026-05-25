@@ -7,6 +7,7 @@
 
 #include <Trade\Trade.mqh>
 #include <Trade\SymbolInfo.mqh>
+#include "BrokerGuard.mqh"
 
 //+------------------------------------------------------------------+
 //| Symbol-aware pip size                                            |
@@ -359,14 +360,16 @@ private:
    int    m_totalTrades;
    int    m_wins;
    int    m_losses;
+   string m_feedbackDir;   // directory where feedback JSONs are written
 
 public:
-   void Init(int magic)
+   void Init(int magic, string feedbackDir = "signals\\feedback")
    {
       m_magic       = magic;
       m_totalTrades = 0;
       m_wins        = 0;
       m_losses      = 0;
+      m_feedbackDir = feedbackDir;
    }
 
    void LogTrade(STradeSignal &signal, double lots)
@@ -390,6 +393,225 @@ public:
       double wr  = closed > 0 ? (double)m_wins / closed * 100.0 : 0;
       PrintFormat("=== ICT EA Summary | Total=%d | Wins=%d | Losses=%d | WinRate=%.1f%% ===",
                   m_totalTrades, m_wins, m_losses, wr);
+   }
+
+   //+----------------------------------------------------------------+
+   //| WriteFeedback                                                  |
+   //|                                                                |
+   //| Writes a JSON feedback file to the configured feedback         |
+   //| directory so that the Python performance tracker can reconcile |
+   //| Layer 2 (published signals) with Layer 3 (EA decisions).       |
+   //|                                                                |
+   //| Parameters                                                     |
+   //|   signalId  – signal_id from the Python signal dict            |
+   //|   symbol    – trading symbol                                   |
+   //|   direction – "BUY" | "SELL"                                  |
+   //|   status    – "EXECUTED" | "REJECTED"                          |
+   //|   reason    – short rejection code (e.g. "SPREAD_TOO_HIGH")    |
+   //|   spreadPips – current spread in pips (0 if not applicable)    |
+   //|   detail    – free-form human-readable explanation             |
+   //+----------------------------------------------------------------+
+   void WriteFeedback(string signalId,
+                      string symbol,
+                      string direction,
+                      string status,
+                      string reason    = "",
+                      double spreadPips = 0,
+                      string detail    = "")
+   {
+      // Build ISO-8601 timestamp from current GMT time
+      MqlDateTime mdt;
+      TimeToStruct(TimeGMT(), mdt);
+      string ts = StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",
+                               mdt.year, mdt.mon, mdt.day,
+                               mdt.hour, mdt.min, mdt.sec);
+
+      // Escape any double-quotes in free-text fields (simple guard)
+      StringReplace(detail, "\"", "'");
+      StringReplace(reason, "\"", "'");
+
+      string json = StringFormat(
+         "{\n"
+         "  \"signal_id\": \"%s\",\n"
+         "  \"symbol\": \"%s\",\n"
+         "  \"direction\": \"%s\",\n"
+         "  \"status\": \"%s\",\n"
+         "  \"reason\": \"%s\",\n"
+         "  \"spread_pips\": %.2f,\n"
+         "  \"timestamp\": \"%s\",\n"
+         "  \"detail\": \"%s\"\n"
+         "}",
+         signalId, symbol, direction, status, reason,
+         spreadPips, ts, detail);
+
+      // Use a filename safe for Windows: replace colons in signal_id
+      string safeName = signalId;
+      StringReplace(safeName, ":", "-");
+      string filePath = m_feedbackDir + "\\" + safeName + ".json";
+
+      int fh = FileOpen(filePath, FILE_WRITE | FILE_TXT | FILE_ANSI);
+      if(fh == INVALID_HANDLE)
+      {
+         Print("WriteFeedback: cannot open ", filePath, " error=", GetLastError());
+         return;
+      }
+      FileWriteString(fh, json);
+      FileClose(fh);
+   }
+};
+
+//+------------------------------------------------------------------+
+//| CHistoricSignalReader                                            |
+//|                                                                  |
+//| Reads backtest signals from a JSONL file exported by the Python  |
+//| backtest runner (python -m python.main --backtest …).            |
+//|                                                                  |
+//| Each line in the file is a complete signal JSON dict.  Signals   |
+//| are served one at a time in chronological order; a signal is     |
+//| returned when the current bar time falls within                  |
+//|   [valid_from, expires_at].                                      |
+//+------------------------------------------------------------------+
+class CHistoricSignalReader
+{
+private:
+   string m_filePath;
+   string m_lines[];   // all lines loaded on first use
+   int    m_lineCount;
+   int    m_cursor;    // next line to check
+   bool   m_loaded;
+
+   bool LoadFile()
+   {
+      m_loaded = true;
+      m_lineCount = 0;
+      m_cursor    = 0;
+      ArrayResize(m_lines, 0);
+
+      int fh = FileOpen(m_filePath, FILE_READ | FILE_TXT | FILE_ANSI | FILE_SHARE_READ);
+      if(fh == INVALID_HANDLE)
+      {
+         Print("CHistoricSignalReader: cannot open ", m_filePath);
+         return false;
+      }
+
+      while(!FileIsEnding(fh))
+      {
+         string line = FileReadString(fh);
+         StringTrimLeft(line);
+         StringTrimRight(line);
+         if(StringLen(line) > 10)
+         {
+            ArrayResize(m_lines, m_lineCount + 1);
+            m_lines[m_lineCount++] = line;
+         }
+      }
+      FileClose(fh);
+      PrintFormat("CHistoricSignalReader: loaded %d signals from %s", m_lineCount, m_filePath);
+      return true;
+   }
+
+public:
+   void Init(string filePath)
+   {
+      m_filePath  = filePath;
+      m_lineCount = 0;
+      m_cursor    = 0;
+      m_loaded    = false;
+   }
+
+   //+----------------------------------------------------------------+
+   //| ReadSignal                                                     |
+   //|                                                                |
+   //| Returns true when a signal whose window [valid_from, expires_at]|
+   //| covers *barTime* is found.  Advances the cursor so that each   |
+   //| signal is returned at most once.                               |
+   //+----------------------------------------------------------------+
+   bool ReadSignal(datetime barTime, STradeSignal &signal)
+   {
+      if(!m_loaded && !LoadFile())
+         return false;
+
+      for(int i = m_cursor; i < m_lineCount; i++)
+      {
+         STradeSignal candidate;
+         // Re-use the existing CSignalReader JSON parser via a temporary instance
+         CSignalReader reader;
+         // We only need ParseSignalJson – extract it directly
+         if(!_ParseLine(m_lines[i], candidate))
+            continue;
+
+         // Check the bar time falls inside [valid_from, expires_at]
+         if(barTime < candidate.createdAt)
+            break;   // signals are chronological; no point looking further
+
+         if(barTime <= candidate.expiresAt)
+         {
+            signal    = candidate;
+            m_cursor  = i + 1;   // advance past this signal
+            return true;
+         }
+         // expires_at already passed for this signal; skip it
+         m_cursor = i + 1;
+      }
+      return false;
+   }
+
+private:
+   bool _ParseLine(string json, STradeSignal &sig)
+   {
+      if(StringLen(json) < 10) return false;
+
+      sig.signalId   = _ExtStr(json, "signal_id");
+      sig.status     = _ExtStr(json, "status");
+      sig.symbol     = _ExtStr(json, "symbol");
+      sig.direction  = _ExtStr(json, "direction");
+      sig.entryType  = _ExtStr(json, "entry_type");
+      sig.setupType  = _ExtStr(json, "setup_type");
+      sig.entryPrice = _ExtDbl(json, "entry_price");
+      sig.stopLoss   = _ExtDbl(json, "stop_loss");
+      sig.takeProfit = _ExtDbl(json, "take_profit");
+      sig.riskPercent= _ExtDbl(json, "risk_percent");
+      sig.confidence = _ExtDbl(json, "confidence_score");
+
+      sig.createdAt  = ParseIsoDatetime(_ExtStr(json, "created_at"));
+      sig.expiresAt  = ParseIsoDatetime(_ExtStr(json, "expires_at"));
+      sig.timestamp  = ParseIsoDatetime(_ExtStr(json, "timestamp"));
+
+      return (sig.entryPrice > 0 && sig.stopLoss > 0 &&
+              sig.takeProfit > 0  && sig.symbol != "");
+   }
+
+   string _ExtStr(string json, string key)
+   {
+      string pattern = "\"" + key + "\"";
+      int pos = StringFind(json, pattern);
+      if(pos < 0) return "";
+      pos = StringFind(json, "\"", pos + StringLen(pattern) + 1);
+      if(pos < 0) return "";
+      int end = StringFind(json, "\"", pos + 1);
+      if(end < 0) return "";
+      return StringSubstr(json, pos + 1, end - pos - 1);
+   }
+
+   double _ExtDbl(string json, string key)
+   {
+      string pattern = "\"" + key + "\"";
+      int pos = StringFind(json, pattern);
+      if(pos < 0) return 0;
+      int colon = StringFind(json, ":", pos);
+      if(colon < 0) return 0;
+      int start = colon + 1;
+      while(StringGetCharacter(json, start) == ' ') start++;
+      int end = start;
+      while(end < StringLen(json))
+      {
+         ushort ch = StringGetCharacter(json, end);
+         if(ch == ',' || ch == '}' || ch == '\n' || ch == '\r') break;
+         end++;
+      }
+      string val = StringSubstr(json, start, end - start);
+      StringTrimRight(val);
+      return StringToDouble(val);
    }
 };
 

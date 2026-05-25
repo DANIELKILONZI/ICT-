@@ -5,12 +5,17 @@ Orchestrates:
   1. Data fetching for all configured symbols and timeframes
   2. ICT strategy analysis (multi-timeframe)
   3. Signal generation
-  4. Performance logging
+  4. Performance logging (three-layer: candidates → signals → executions)
   5. Notification dispatch
   6. Integration (file / HTTP / socket)
+  7. EA feedback ingestion (execution_feedback poller)
+
+Backtest mode (Issue 10):
+  python -m python.main --backtest --from 2024-01-01 --to 2024-12-31 --symbol EURUSD
 """
 from __future__ import annotations
 
+import argparse
 import logging
 import signal
 import sys
@@ -22,8 +27,9 @@ import yaml
 
 from python.config import CONFIG, SYMBOLS, TIMEFRAMES
 from python.data_engine.data_store import get_ohlcv, refresh
+from python.integration.execution_feedback import ingest_pending as ingest_ea_feedback
 from python.ml.signal_filter import passes_ml_filter
-from python.performance.tracker import log_signal, notify_signal, statistics
+from python.performance.tracker import log_candidate, log_signal, notify_signal, statistics
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
 
@@ -111,6 +117,15 @@ def run_analysis_cycle() -> None:
                 logger.debug("%s: No valid setup. Reasons: %s", symbol, analysis.reasons)
                 continue
 
+            # Layer 1 – record the candidate setup (all hard gates passed)
+            log_candidate(
+                symbol=symbol,
+                direction=analysis.signal_direction or "",
+                confidence_score=analysis.confluence_score,
+                setup_type=str(getattr(analysis, "setup_name", "") or ""),
+                reasons=analysis.reasons,
+            )
+
             # Optional ML filter
             hour_utc = datetime.now(timezone.utc).hour
             if not passes_ml_filter(analysis, hour_utc=hour_utc):
@@ -120,6 +135,7 @@ def run_analysis_cycle() -> None:
             signal = generate_signal(analysis, cycle_id=cycle_id)
             if signal:
                 save_signal(signal)
+                # Layer 2 – record the published signal
                 log_signal(signal)
                 notify_signal(signal)
                 logger.info("✅  Signal saved for %s %s", symbol, signal["direction"])
@@ -127,8 +143,74 @@ def run_analysis_cycle() -> None:
         except Exception as exc:  # noqa: BLE001
             logger.error("Error analysing %s: %s", symbol, exc, exc_info=True)
 
+    # Layer 3 – ingest any EA feedback written since the last cycle
+    try:
+        ingest_ea_feedback()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("EA feedback ingestion failed: %s", exc)
+
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="ICT Multi-Timeframe Trading System"
+    )
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="Run in backtest export mode instead of live scanning.",
+    )
+    parser.add_argument(
+        "--from",
+        dest="date_from",
+        metavar="YYYY-MM-DD",
+        help="Backtest start date (required with --backtest).",
+    )
+    parser.add_argument(
+        "--to",
+        dest="date_to",
+        metavar="YYYY-MM-DD",
+        help="Backtest end date (required with --backtest).",
+    )
+    parser.add_argument(
+        "--symbol",
+        metavar="SYMBOL",
+        help="Symbol to backtest (required with --backtest).",
+    )
+    args = parser.parse_args()
+
+    if args.backtest:
+        _run_backtest_mode(args)
+    else:
+        _run_live_mode()
+
+
+def _run_backtest_mode(args: argparse.Namespace) -> None:
+    """Export historical signals to JSONL for Strategy Tester replay."""
+    missing = [
+        f for f, v in [("--from", args.date_from), ("--to", args.date_to), ("--symbol", args.symbol)]
+        if not v
+    ]
+    if missing:
+        logger.error("Backtest mode requires: %s", ", ".join(missing))
+        sys.exit(1)
+
+    from python.backtest.runner import run_backtest
+
+    logger.info("=== ICT Backtest Export Mode ===")
+    try:
+        out = run_backtest(
+            symbol=args.symbol.upper(),
+            start_date=args.date_from,
+            end_date=args.date_to,
+        )
+        logger.info("Backtest signals written to: %s", out)
+    except Exception as exc:
+        logger.error("Backtest failed: %s", exc, exc_info=True)
+        sys.exit(1)
+
+
+def _run_live_mode() -> None:
+    """Run continuous live analysis loop."""
     logger.info("=== ICT Multi-Timeframe Trading System Starting ===")
     _start_integration()
 

@@ -26,6 +26,11 @@ _DEFAULTS: dict[str, Any] = {
         "log_file": "logs/ict_system.log",
         "signal_output_path": "signals/active",
         "performance_log": "logs/performance.csv",
+        "signals_log": "logs/signals.csv",
+        "candidates_log": "logs/candidates.csv",
+        "executions_log": "logs/executions.csv",
+        "rejections_log": "logs/rejections.csv",
+        "execution_feedback_dir": "signals/feedback",
         "scan_interval_seconds": 60,
     },
     "mt5": {
@@ -95,18 +100,25 @@ _DEFAULTS: dict[str, Any] = {
     },
     "integration": {
         "mode": "file",
-        "http_host": "0.0.0.0",
+        "http_host": "127.0.0.1",
         "http_port": 5000,
         "http_workers": 2,
         "socket_host": "0.0.0.0",
         "socket_port": 9999,
         "signal_ttl_seconds": 300,
         "api_key": "",
+        "ip_allowlist": [],
+        "hmac_secret": "",
+        "nonce_window_seconds": 300,
     },
     "telegram": {
         "enabled": False,
         "bot_token": "",
         "chat_id": "",
+    },
+    "backtest": {
+        "output_dir": "backtests/signals",
+        "data_source": "csv",
     },
     "pip_sizes": {
         "default": 0.0001,
@@ -214,3 +226,17 @@ LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 PERF_LOG: Path = _ROOT / CONFIG["system"]["performance_log"]
 PERF_LOG.parent.mkdir(parents=True, exist_ok=True)
+
+# Multi-layer performance logs (Issue 11)
+CANDIDATES_LOG: Path = _ROOT / CONFIG["system"]["candidates_log"]
+SIGNALS_LOG: Path = _ROOT / CONFIG["system"]["signals_log"]
+EXECUTIONS_LOG: Path = _ROOT / CONFIG["system"]["executions_log"]
+REJECTIONS_LOG: Path = _ROOT / CONFIG["system"]["rejections_log"]
+EXECUTION_FEEDBACK_DIR: Path = _ROOT / CONFIG["system"]["execution_feedback_dir"]
+EXECUTION_FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+for _p in (CANDIDATES_LOG, SIGNALS_LOG, EXECUTIONS_LOG, REJECTIONS_LOG):
+    _p.parent.mkdir(parents=True, exist_ok=True)
+
+# Backtest output directory
+BACKTEST_OUTPUT_DIR: Path = _ROOT / CONFIG.get("backtest", {}).get("output_dir", "backtests/signals")
+BACKTEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

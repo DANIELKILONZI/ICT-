@@ -13,7 +13,9 @@
 //--- Input parameters
 input string   InpSignalDir       = "signals\\active";  // Signal directory (one JSON per symbol)
 input string   InpHttpEndpoint    = "http://127.0.0.1:5000/signal"; // HTTP endpoint (if mode=http)
-input int      InpSignalMode      = 0;      // 0=File, 1=HTTP
+input int      InpSignalMode      = 0;      // 0=File, 1=HTTP, 2=HistoricJSONL (backtest replay)
+input string   InpBacktestSignalFile = "";  // JSONL file for backtest replay (mode=2)
+input string   InpFeedbackDir     = "signals\\feedback"; // Directory for EA feedback JSONs
 input double   InpRiskPercent     = 1.0;    // Risk per trade (%)
 input double   InpMaxDailyLoss    = 3.0;    // Max daily loss (%)
 input int      InpMaxTradesPerDay = 5;      // Max trades per day
@@ -27,10 +29,12 @@ input int      InpMagicNumber     = 202401; // EA magic number
 input bool     InpEnableBacktest  = true;   // Generate simulated signals in Strategy Tester
 
 //--- Global state
-CSignalReader   g_reader;
-CRiskManager    g_risk;
-CTradeExecutor  g_executor;
-CTradeLogger    g_logger;
+CSignalReader        g_reader;
+CHistoricSignalReader g_historicReader;
+CRiskManager         g_risk;
+CTradeExecutor       g_executor;
+CBrokerGuard         g_guard;
+CTradeLogger         g_logger;
 
 datetime        g_lastSignalTime  = 0;
 string          g_lastSignalId    = "";   // prevents re-executing the same signal
@@ -46,13 +50,17 @@ int OnInit()
    g_risk.Init(InpRiskPercent, InpMaxDailyLoss, InpMaxTradesPerDay,
                InpMaxSpreadPips, InpMaxSlippagePips);
    g_executor.Init(InpMagicNumber, (int)(InpMaxSlippagePips * 10));
-   g_logger.Init(InpMagicNumber);
+   g_logger.Init(InpMagicNumber, InpFeedbackDir);
 
    // Construct per-symbol signal file path: signals\active\{SYMBOL}.json
    string symbolFile = InpSignalDir + "\\" + _Symbol + ".json";
    // HTTP mode: append ?symbol= query parameter
    string httpUrl    = InpHttpEndpoint + "?symbol=" + _Symbol;
    g_reader.Init(symbolFile, httpUrl, InpSignalMode);
+
+   // Historic JSONL reader for backtest replay (mode=2)
+   if(InpSignalMode == 2 && StringLen(InpBacktestSignalFile) > 0)
+      g_historicReader.Init(InpBacktestSignalFile);
 
    g_today             = iTime(_Symbol, PERIOD_D1, 0);
    g_dailyStartEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -142,7 +150,13 @@ void OnTick()
    STradeSignal signal;
    bool         hasSignal;
 
-   if(InpEnableBacktest && MQLInfoInteger(MQL_TESTER))
+   if(InpSignalMode == 2)
+   {
+      // Historic JSONL replay mode – serve signals by bar time
+      datetime barTime = iTime(_Symbol, PERIOD_M5, 0);
+      hasSignal = g_historicReader.ReadSignal(barTime, signal);
+   }
+   else if(InpEnableBacktest && MQLInfoInteger(MQL_TESTER))
       hasSignal = GenerateBacktestSignal(signal);
    else
       hasSignal = g_reader.ReadSignal(signal);
@@ -162,6 +176,9 @@ void OnTick()
                TimeToString(signal.expiresAt, TIME_DATE|TIME_SECONDS), ") – skipping.");
          lastExpiredLog = TimeCurrent();
       }
+      g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
+                             "REJECTED", "SIGNAL_EXPIRED", 0,
+                             "Signal expired at " + TimeToString(signal.expiresAt));
       return;
    }
 
@@ -181,6 +198,9 @@ void OnTick()
    if(g_executor.HasOpenTrade(_Symbol, InpMagicNumber))
    {
       Print("Trade already open for ", _Symbol, " – skipping.");
+      g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
+                             "REJECTED", "DUPLICATE_POSITION", 0,
+                             "A trade for " + _Symbol + " is already open");
       return;
    }
 
@@ -195,6 +215,30 @@ void OnTick()
    if(lotSize <= 0)
    {
       Print("Invalid lot size calculated. Skipping signal.");
+      g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
+                             "REJECTED", "INVALID_LOT_SIZE", 0,
+                             "Calculated lot size is zero or negative");
+      return;
+   }
+
+   // ── Broker constraint validation (Issue 9) ──────────────────────────
+   if(!g_guard.Validate(_Symbol, signal.direction,
+                        signal.entryPrice, signal.stopLoss, signal.takeProfit,
+                        lotSize))
+   {
+      // Capture current spread for the feedback record
+      long   spreadPts = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+      double point     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      double spreadPips = 0;
+      double pipSize   = SymbolPipSize(_Symbol);
+      if(pipSize > 0) spreadPips = spreadPts * point / pipSize;
+
+      PrintFormat("BrokerGuard rejected: %s | %s", g_guard.GetRejectionReason(), g_guard.GetDetail());
+      g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
+                             "REJECTED",
+                             g_guard.GetRejectionReason(),
+                             spreadPips,
+                             g_guard.GetDetail());
       return;
    }
 
@@ -214,9 +258,18 @@ void OnTick()
       g_lastSignalId   = signal.signalId;
       g_tradesToday++;
       g_logger.LogTrade(signal, lotSize);
+      // Write execution feedback so Python can reconcile Layer 3
+      g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
+                             "EXECUTED", "", 0, "");
       Print("✅ Trade executed: ", signal.direction, " ", _Symbol,
             " @ ", signal.entryPrice, " SL=", signal.stopLoss, " TP=", signal.takeProfit,
             " id=", signal.signalId);
+   }
+   else
+   {
+      g_logger.WriteFeedback(signal.signalId, signal.symbol, signal.direction,
+                             "REJECTED", "ORDER_SEND_FAILED", 0,
+                             "OrderSend returned false");
    }
 }
 

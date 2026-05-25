@@ -4,7 +4,12 @@ system:
   log_level: INFO
   log_file: logs/ict_system.log
   signal_output_path: signals/active   # directory; one JSON per symbol
-  performance_log: logs/performance.csv
+  performance_log: logs/performance.csv   # legacy/compat – same as signals_log
+  signals_log: logs/signals.csv           # Layer 2: published signals
+  candidates_log: logs/candidates.csv     # Layer 1: valid analysis setups
+  executions_log: logs/executions.csv     # Layer 3: confirmed EA executions
+  rejections_log: logs/rejections.csv     # Layer 3: EA-side rejections
+  execution_feedback_dir: signals/feedback # EA writes JSON feedback here
   scan_interval_seconds: 60
 
 mt5:
@@ -97,15 +102,24 @@ ml:
 
 integration:
   mode: file            # file | http | socket
-  http_host: "0.0.0.0"
+  http_host: "127.0.0.1"  # localhost-only by default; set to 0.0.0.0 if binding to all interfaces
   http_port: 5000
   http_workers: 2       # Gunicorn worker processes
   socket_host: "0.0.0.0"
   socket_port: 9999
   signal_ttl_seconds: 300     # signal expires after N seconds
   api_key: ""           # Set a non-empty secret to require X-API-Key on /signal endpoints
+  # Security hardening (Issue 12)
+  ip_allowlist: []      # e.g. ["127.0.0.1", "10.0.0.5"]; empty list = allow all
+  hmac_secret: ""       # Set to a long random string to require HMAC-SHA256 signatures on POST
+  nonce_window_seconds: 300   # reject replay of nonces seen within this window
 
 telegram:
   enabled: false
   bot_token: ""
   chat_id: ""
+
+# Backtest export mode (Issue 10)
+backtest:
+  output_dir: backtests/signals   # JSONL files written here
+  data_source: csv                # csv | mt5
