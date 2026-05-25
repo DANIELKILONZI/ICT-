@@ -125,7 +125,7 @@ def _check_nonce(data: dict) -> "tuple[Any, int] | None":
         _evict_old_nonces()
         if nonce in _seen_nonces:
             logger.warning("Replay detected: nonce %r already seen", nonce)
-            return {"error": "replay_detected", "nonce": nonce}, 409
+            return {"error": "replay_detected"}, 409
         _seen_nonces[nonce] = time.time()
     return None
 
