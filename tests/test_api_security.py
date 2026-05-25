@@ -18,6 +18,8 @@ import uuid
 
 import pytest
 
+flask = pytest.importorskip("flask", reason="Flask required for API security tests")
+
 import python.integration.api_server as api_mod
 
 

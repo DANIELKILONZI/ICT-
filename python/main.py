@@ -37,6 +37,7 @@ from python.performance.tracker import (
     statistics,
     trades_today_count,
 )
+from python.performance.portfolio_exposure import is_portfolio_exposure_allowed
 from python.signal_generator.signal_generator import generate_signal, save_signal
 from python.strategy_engine.mtf_engine import analyse
 
@@ -143,6 +144,12 @@ def run_analysis_cycle() -> None:
             # ── Per-symbol risk gate ───────────────────────────────────────
             if not allow_multiple and has_open_trade(symbol):
                 logger.debug("%s: Open trade exists – skipping.", symbol)
+                continue
+
+            # ── Portfolio correlation exposure gate ────────────────────────
+            risk_pct = CONFIG["risk"].get("risk_percent", 1.0)
+            if not is_portfolio_exposure_allowed(symbol, risk_pct):
+                logger.info("%s: Correlated exposure limit reached – skipping.", symbol)
                 continue
 
             df_d1 = get_ohlcv(symbol, tf_macro, count)

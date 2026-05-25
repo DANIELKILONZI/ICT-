@@ -91,6 +91,8 @@ _DEFAULTS: dict[str, Any] = {
         },
         "default_session": {},
         "sessions": {},
+        "correlation_groups": {},
+        "max_correlated_exposure_percent": 2.0,
     },
     "signal": {
         "min_confidence": 0.65,
