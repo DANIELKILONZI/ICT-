@@ -48,6 +48,27 @@ _MIN_RR = SIGNAL_CFG.get("min_risk_reward", 2.0)
 _SPREAD_PIPS = SIGNAL_CFG.get("spread_pips", 1.0)
 _RISK_PERCENT = RISK.get("risk_percent", 1.0)
 
+# Only uppercase ASCII letters and digits are valid in a symbol name.
+# This prevents path traversal when the symbol is used in a file path.
+_SAFE_SYMBOL_RE = re.compile(r'^[A-Z0-9]{1,20}$')
+
+
+def _validated_symbol(symbol: str) -> str:
+    """
+    Return *symbol* uppercased after verifying it is a safe filesystem name.
+
+    Raises ``SignalValidationError`` if *symbol* contains characters that
+    could be used for path traversal (``/``, ``..``, whitespace, etc.).
+    """
+    clean = symbol.strip().upper()
+    if not _SAFE_SYMBOL_RE.match(clean):
+        raise SignalValidationError(
+            f"Symbol {symbol!r} contains invalid characters and cannot be used "
+            "as a file path component.",
+            field="symbol",
+        )
+    return clean
+
 
 def _signal_ttl() -> int:
     """Return signal TTL in seconds from integration config."""
@@ -283,7 +304,7 @@ def save_signal(signal: dict) -> None:
                 field=field,
             )
 
-    final_path = signal_path_for(signal["symbol"])
+    final_path = signal_path_for(_validated_symbol(signal["symbol"]))
     sanitized = _sanitize_signal(signal)
     payload = json.dumps(sanitized, indent=2)
 
@@ -322,7 +343,7 @@ def load_latest_signal(symbol: str) -> Optional[dict]:
         The trading symbol whose signal file should be read
         (e.g. ``"EURUSD"``).
     """
-    path = signal_path_for(symbol)
+    path = signal_path_for(_validated_symbol(symbol))
     if not path.exists():
         return None
     try:
