@@ -48,23 +48,26 @@ _MIN_RR = SIGNAL_CFG.get("min_risk_reward", 2.0)
 _SPREAD_PIPS = SIGNAL_CFG.get("spread_pips", 1.0)
 _RISK_PERCENT = RISK.get("risk_percent", 1.0)
 
-# Only uppercase ASCII letters and digits are valid in a symbol name.
-# This prevents path traversal when the symbol is used in a file path.
-_SAFE_SYMBOL_RE = re.compile(r'^[A-Z0-9]{1,20}$')
+_SAFE_SYMBOL_RE = re.compile(r'[^A-Z0-9]')
 
 
 def _validated_symbol(symbol: str) -> str:
     """
-    Return *symbol* uppercased after verifying it is a safe filesystem name.
+    Return a filesystem-safe version of *symbol* by stripping every character
+    that is not an uppercase ASCII letter or digit.
 
-    Raises ``SignalValidationError`` if *symbol* contains characters that
-    could be used for path traversal (``/``, ``..``, whitespace, etc.).
+    This prevents path traversal when the symbol value is used to construct a
+    file path (e.g. ``signals/active/EURUSD.json``).  Characters like ``/``,
+    ``..``, whitespace, and null bytes are removed before the value is used.
+
+    Raises ``SignalValidationError`` if the cleaned result is empty or too long
+    (> 20 characters), which would indicate an invalid or spoofed symbol.
     """
-    clean = symbol.strip().upper()
-    if not _SAFE_SYMBOL_RE.match(clean):
+    clean = _SAFE_SYMBOL_RE.sub("", symbol.strip().upper())
+    if not clean or len(clean) > 20:
         raise SignalValidationError(
-            f"Symbol {symbol!r} contains invalid characters and cannot be used "
-            "as a file path component.",
+            f"Symbol {symbol!r} is not a valid trading symbol (must be 1-20 "
+            "alphanumeric characters after stripping unsafe chars).",
             field="symbol",
         )
     return clean
