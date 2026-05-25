@@ -12,13 +12,17 @@ Feedback file format (written by the EA's WriteFeedback() MQL5 function):
 
     {
       "signal_id": "EURUSD-20260525-083000-ICT_FVG_OB_SWEEP",
-      "status": "REJECTED",
-      "reason": "SPREAD_TOO_HIGH",
-      "spread_pips": 4.2,
+      "status": "EXECUTED",
       "symbol": "EURUSD",
       "direction": "BUY",
+      "lots": 0.10,
+      "entry_price": 1.08500,
+      "stop_loss": 1.08300,
+      "take_profit": 1.09000,
+      "reason": "",
+      "spread_pips": 0.0,
       "timestamp": "2026-05-25T08:31:10Z",
-      "detail": "spread 4.2 > max 3.0 pips"
+      "detail": ""
     }
 
 Usage (called from ``python/main.py``)::

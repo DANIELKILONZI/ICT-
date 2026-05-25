@@ -192,6 +192,31 @@ class TestLogExecutionFeedback:
         assert rows[0]["reason"] == "SPREAD_TOO_HIGH"
         assert not _read_csv(t.EXECUTIONS_LOG)
 
+    def test_executed_marks_signal_in_signals_and_perf_csv(self, tmp_path):
+        import python.performance.tracker as t
+        t.SIGNALS_LOG    = tmp_path / "signals.csv"
+        t.PERF_LOG       = tmp_path / "performance.csv"
+        t.REJECTIONS_LOG = tmp_path / "rejections.csv"
+        t.EXECUTIONS_LOG = tmp_path / "executions.csv"
+
+        sig = _make_signal()
+        log_signal(sig)
+        assert _read_csv(t.SIGNALS_LOG)[0]["result"] == "OPEN"
+        assert _read_csv(t.PERF_LOG)[0]["result"] == "OPEN"
+
+        log_execution_feedback({
+            "signal_id": sig["signal_id"],
+            "symbol": "EURUSD",
+            "direction": "BUY",
+            "status": "EXECUTED",
+            "lots": 0.10,
+            "entry_price": 1.08500,
+            "stop_loss": 1.08300,
+            "take_profit": 1.09000,
+        })
+        assert _read_csv(t.SIGNALS_LOG)[0]["result"] == "EXECUTED"
+        assert _read_csv(t.PERF_LOG)[0]["result"] == "EXECUTED"
+
     def test_rejected_marks_signal_in_signals_csv(self, tmp_path):
         import python.performance.tracker as t
         t.SIGNALS_LOG    = tmp_path / "signals.csv"

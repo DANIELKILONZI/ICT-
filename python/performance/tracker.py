@@ -314,6 +314,7 @@ def log_execution_feedback(feedback: dict) -> None:
             "reason": "",
         }
         _append(EXECUTIONS_LOG, _EXECUTION_HEADERS, row)
+        _mark_signal_executed(signal_id)
         logger.info("Execution confirmed: %s %s %s", signal_id, symbol, direction)
 
     elif status == "REJECTED":
@@ -340,6 +341,16 @@ def log_execution_feedback(feedback: dict) -> None:
 
 def _mark_signal_rejected(signal_id: str) -> None:
     """Update signals.csv to mark the given signal_id as REJECTED."""
+    _mark_signal_result(signal_id, "REJECTED")
+
+
+def _mark_signal_executed(signal_id: str) -> None:
+    """Update signals.csv to mark the given signal_id as EXECUTED."""
+    _mark_signal_result(signal_id, "EXECUTED")
+
+
+def _mark_signal_result(signal_id: str, result: str) -> None:
+    """Update OPEN signal rows in signals/performance logs to the given result."""
     for path in (SIGNALS_LOG, PERF_LOG):
         if not path.exists():
             continue
@@ -350,7 +361,7 @@ def _mark_signal_rejected(signal_id: str) -> None:
                 rows = list(csv.DictReader(fh))
             for row in rows:
                 if row.get("signal_id") == signal_id and row.get("result") == "OPEN":
-                    row["result"] = "REJECTED"
+                    row["result"] = result
                     changed = True
                     break
             if changed:

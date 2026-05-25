@@ -12,7 +12,7 @@ The Python side and EA are decoupled through file or HTTP integration.
 
 - Runs multi-timeframe analysis (D1 → H1 → M5)
 - Detects ICT-style structure and confluence (BOS, FVG, OB, liquidity, premium/discount)
-- Generates execution-ready signals with TTL and payload hash
+- Generates execution-ready signals with TTL and payload hash metadata
 - Applies Python-side risk guards before publishing
 - Supports optional ML scoring (advisory policy mode)
 - Tracks candidates, published signals, and EA execution/rejection feedback
@@ -113,6 +113,8 @@ Behavior:
 - Applies portfolio guards:
   - `daily_loss_reached()`
   - `trades_today_count()`
+- Python guards are advisory/pre-publication checks.
+- MT5 EA is the final risk authority for equity, margin, spread, and broker/runtime constraints.
 - Applies per-symbol duplicate guard:
   - `has_open_trade(symbol)` unless `risk.allow_multiple_positions_per_symbol: true`
 - Publishes per-symbol signals
@@ -143,7 +145,7 @@ Key fields include:
 - identity/lifecycle: `signal_id`, `created_at`, `expires_at`, `status`
 - execution: `symbol`, `direction`, `entry_type`, `entry_price`, `stop_loss`, `take_profit`
 - quality/context: `risk_reward`, `confidence_score`, `setup_type`, `reasons`
-- integrity: `payload_hash`
+- integrity metadata: `payload_hash`
 - optional ML metadata: `ml_enabled`, `ml_score`, `ml_decision`, `ml_quality`, `ml_features`
 
 Signal writes are atomic (`tmp -> fsync -> os.replace`) to avoid partial reads by the EA.

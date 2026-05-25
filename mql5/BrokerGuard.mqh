@@ -38,6 +38,7 @@ public:
    //+------------------------------------------------------------------+
    bool Validate(string    symbol,
                  string    direction,
+                 string    entryType,
                  double    entryPrice,
                  double    stopLoss,
                  double    takeProfit,
@@ -48,6 +49,11 @@ public:
 
       if(!CheckSymbolTradeable(symbol))    return false;
       if(!CheckStopDistance(symbol, direction, entryPrice, stopLoss, takeProfit)) return false;
+      if(entryType == "LIMIT")
+      {
+         if(!CheckPendingEntryDistance(symbol, direction, entryPrice)) return false;
+         if(!CheckStopsRelativeToEntry(symbol, direction, entryPrice, stopLoss, takeProfit)) return false;
+      }
       if(!CheckLotSize(symbol, lots))      return false;
       if(!CheckMargin(symbol, direction, lots, entryPrice))                        return false;
       if(!CheckFillMode(symbol))           return false;
@@ -134,6 +140,99 @@ private:
          return false;
       }
 
+      return true;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Verify pending LIMIT entry is far enough from current price      |
+   //+------------------------------------------------------------------+
+   bool CheckPendingEntryDistance(string symbol, string direction, double entryPrice)
+   {
+      long stopLevel   = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+      long freezeLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+      long minPoints   = stopLevel + freezeLevel;
+      if(minPoints <= 0) return true;
+
+      double point   = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double minDist = minPoints * point;
+      double ask     = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      double bid     = SymbolInfoDouble(symbol, SYMBOL_BID);
+
+      if(direction == "BUY")
+      {
+         double dist = ask - entryPrice;
+         if(dist < minDist)
+         {
+            m_rejectionReason = "PENDING_ENTRY_TOO_CLOSE";
+            m_detail = StringFormat(
+               "BUY_LIMIT entry too close: ask-entry=%.5f < required=%.5f (%d points) for %s",
+               dist, minDist, (int)minPoints, symbol);
+            return false;
+         }
+      }
+      else if(direction == "SELL")
+      {
+         double dist = entryPrice - bid;
+         if(dist < minDist)
+         {
+            m_rejectionReason = "PENDING_ENTRY_TOO_CLOSE";
+            m_detail = StringFormat(
+               "SELL_LIMIT entry too close: entry-bid=%.5f < required=%.5f (%d points) for %s",
+               dist, minDist, (int)minPoints, symbol);
+            return false;
+         }
+      }
+
+      return true;
+   }
+
+   //+------------------------------------------------------------------+
+   //| Verify SL/TP are logically valid relative to pending entry       |
+   //+------------------------------------------------------------------+
+   bool CheckStopsRelativeToEntry(string symbol,
+                                  string direction,
+                                  double entryPrice,
+                                  double stopLoss,
+                                  double takeProfit)
+   {
+      if(direction == "BUY")
+      {
+         if(stopLoss >= entryPrice)
+         {
+            m_rejectionReason = "INVALID_STOP_RELATIVE_TO_ENTRY";
+            m_detail = StringFormat(
+               "BUY stop loss %.5f must be below entry %.5f for %s",
+               stopLoss, entryPrice, symbol);
+            return false;
+         }
+         if(takeProfit <= entryPrice)
+         {
+            m_rejectionReason = "INVALID_TP_RELATIVE_TO_ENTRY";
+            m_detail = StringFormat(
+               "BUY take profit %.5f must be above entry %.5f for %s",
+               takeProfit, entryPrice, symbol);
+            return false;
+         }
+      }
+      else if(direction == "SELL")
+      {
+         if(stopLoss <= entryPrice)
+         {
+            m_rejectionReason = "INVALID_STOP_RELATIVE_TO_ENTRY";
+            m_detail = StringFormat(
+               "SELL stop loss %.5f must be above entry %.5f for %s",
+               stopLoss, entryPrice, symbol);
+            return false;
+         }
+         if(takeProfit >= entryPrice)
+         {
+            m_rejectionReason = "INVALID_TP_RELATIVE_TO_ENTRY";
+            m_detail = StringFormat(
+               "SELL take profit %.5f must be below entry %.5f for %s",
+               takeProfit, entryPrice, symbol);
+            return false;
+         }
+      }
       return true;
    }
 
