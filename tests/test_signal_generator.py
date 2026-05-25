@@ -36,10 +36,10 @@ from python.signal_generator.signal_generator import (
 # ---------------------------------------------------------------------------
 
 _REQUIRED_SIGNAL_KEYS = {
-    "signal_id", "created_at", "expires_at", "valid_from",
+    "signal_id", "created_at", "expires_at", "valid_from", "valid_to",
     "engine_cycle_id", "status", "payload_hash",
     "symbol", "direction", "entry_price", "stop_loss", "take_profit",
-    "risk_reward", "risk_percent", "confidence_score", "timestamp",
+    "risk_reward", "risk_percent", "confidence_score", "timestamp", "stop_loss_distance_pips",
     "setup_type",
 }
 
@@ -167,6 +167,18 @@ class TestGenerateSignalValid:
         created = datetime.fromisoformat(sig["created_at"].replace("Z", "+00:00"))
         expires = datetime.fromisoformat(sig["expires_at"].replace("Z", "+00:00"))
         assert expires > created
+
+    def test_valid_to_is_not_before_valid_from(self):
+        sig = self._valid_signal()
+        valid_from = datetime.fromisoformat(sig["valid_from"].replace("Z", "+00:00"))
+        valid_to = datetime.fromisoformat(sig["valid_to"].replace("Z", "+00:00"))
+        assert valid_to >= valid_from
+
+    def test_valid_to_not_after_expires_at(self):
+        sig = self._valid_signal()
+        valid_to = datetime.fromisoformat(sig["valid_to"].replace("Z", "+00:00"))
+        expires = datetime.fromisoformat(sig["expires_at"].replace("Z", "+00:00"))
+        assert valid_to <= expires
 
     def test_engine_cycle_id_propagated(self):
         sig = self._valid_signal(cycle_id="cycle-000042")

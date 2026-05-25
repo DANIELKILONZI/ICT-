@@ -84,11 +84,22 @@ risk:
   max_trades_per_day: 5
   max_spread_pips: 3.0
   max_slippage_pips: 2.0
+  # Legacy fallback (still supported)
   trading_hours:              # UTC hours
     london_open: 8
     london_close: 17
     ny_open: 13
     ny_close: 22
+  # Symbol-aware sessions (preferred)
+  default_session:
+    london_open: "08:00"
+    london_close: "17:00"
+    ny_open: "13:00"
+    ny_close: "22:00"
+  sessions:
+    XAUUSD:
+      london_open: "00:00"
+      london_close: "23:59"
 
 signal:
   min_confidence: 0.65        # minimum confidence score to emit signal

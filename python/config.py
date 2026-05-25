@@ -6,6 +6,7 @@ required keys, and exposes typed convenience constants.
 """
 from __future__ import annotations
 
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +89,8 @@ _DEFAULTS: dict[str, Any] = {
             "ny_open": 13,
             "ny_close": 22,
         },
+        "default_session": {},
+        "sessions": {},
     },
     "signal": {
         "min_confidence": 0.65,
@@ -185,6 +188,101 @@ ML_CFG: dict[str, Any] = CONFIG.get("ml", {})
 TELEGRAM: dict[str, Any] = CONFIG.get("telegram", {})
 SCORING: dict[str, Any] = CONFIG.get("scoring", {})
 PIP_SIZES: dict[str, Any] = CONFIG.get("pip_sizes", {"default": 0.0001})
+
+
+def _parse_session_time(value: Any, fallback: str | None = None) -> time | None:
+    """Parse session times from int hour or HH:MM string."""
+    if value is None:
+        if fallback is None:
+            return None
+        value = fallback
+    if isinstance(value, int):
+        return time(hour=max(0, min(23, value)), minute=0)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if ":" in raw:
+            hh, mm = raw.split(":", 1)
+            return time(hour=max(0, min(23, int(hh))), minute=max(0, min(59, int(mm))))
+        return time(hour=max(0, min(23, int(raw))), minute=0)
+    return None
+
+
+def _session_windows(session_cfg: dict[str, Any]) -> list[tuple[time, time]]:
+    windows: list[tuple[time, time]] = []
+    for open_k, close_k in (("london_open", "london_close"), ("ny_open", "ny_close")):
+        open_t = _parse_session_time(session_cfg.get(open_k))
+        if open_t is None:
+            continue
+        close_t = _parse_session_time(session_cfg.get(close_k), fallback="23:59")
+        if close_t is None:
+            continue
+        windows.append((open_t, close_t))
+    return windows
+
+
+def session_for_symbol(symbol: str) -> dict[str, Any]:
+    """
+    Return merged session config for *symbol*.
+
+    Precedence:
+      1) risk.sessions[{SYMBOL}]
+      2) risk.default_session
+      3) legacy risk.trading_hours
+    """
+    risk = CONFIG.get("risk", {})
+    default_session = risk.get("default_session", {}) or {}
+    legacy_hours = risk.get("trading_hours", {}) or {}
+    base = default_session or legacy_hours
+    symbol_overrides = (risk.get("sessions", {}) or {}).get(symbol.upper(), {}) or {}
+    merged = {**base, **symbol_overrides}
+    return merged
+
+
+def session_is_open(symbol: str, now_utc: datetime | None = None) -> bool:
+    """Return True when now is inside any configured trading window for symbol."""
+    now = now_utc or datetime.now(timezone.utc)
+    windows = _session_windows(session_for_symbol(symbol))
+    if not windows:
+        return True
+    for start, end in windows:
+        if start <= end:
+            if start <= now.time() < end:
+                return True
+        else:
+            if now.time() >= start or now.time() < end:
+                return True
+    return False
+
+
+def current_session_bounds(symbol: str, now_utc: datetime | None = None) -> tuple[datetime, datetime] | None:
+    """
+    Return (valid_from, valid_to) UTC datetimes for the active session window.
+    """
+    now = now_utc or datetime.now(timezone.utc)
+    windows = _session_windows(session_for_symbol(symbol))
+    if not windows:
+        return now, now + timedelta(hours=24)
+
+    for start, end in windows:
+        start_dt = now.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0)
+        end_dt = now.replace(hour=end.hour, minute=end.minute, second=0, microsecond=0)
+
+        if start <= end:
+            if now.time() < start:
+                continue
+            if now.time() >= end:
+                continue
+            return start_dt, end_dt
+
+        # Overnight window (e.g. 22:00-06:00)
+        if now.time() >= start:
+            return start_dt, end_dt + timedelta(days=1)
+        if now.time() < end:
+            return start_dt - timedelta(days=1), end_dt
+
+    return None
 
 
 def pip_size_for(symbol: str) -> float:

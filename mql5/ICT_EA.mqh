@@ -59,6 +59,8 @@ struct STradeSignal
 {
    string   signalId;       // e.g. "EURUSD-20260525-083000-ICT_FVG_OB_SWEEP"
    datetime createdAt;      // signal creation time (UTC)
+   datetime validFrom;      // optional session validity start (UTC)
+   datetime validTo;        // optional session validity end (UTC)
    datetime expiresAt;      // signal expiry time (UTC) – reject if now > expiresAt
    string   status;         // "ACTIVE" expected; reject otherwise
    string   symbol;
@@ -155,6 +157,12 @@ private:
       string createdStr = ExtractJsonString(json, "created_at");
       signal.createdAt  = ParseIsoDatetime(createdStr);
 
+      string validFromStr = ExtractJsonString(json, "valid_from");
+      signal.validFrom = ParseIsoDatetime(validFromStr);
+
+      string validToStr = ExtractJsonString(json, "valid_to");
+      signal.validTo = ParseIsoDatetime(validToStr);
+
       string expiresStr = ExtractJsonString(json, "expires_at");
       signal.expiresAt  = ParseIsoDatetime(expiresStr);
 
@@ -247,16 +255,24 @@ public:
    }
 
    double CalculateLotSize(string symbol, double entryPrice, double stopLoss,
-                           double riskPct)
+                           double riskPct, double maxStopPips = 50.0)
    {
       double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
-      double riskAmt   = balance * riskPct / 100.0;
+      double pipSize       = SymbolPipSize(symbol);
+      double slDistancePips = MathAbs(entryPrice - stopLoss) / pipSize;
+
+      double volFactor = 1.0;
+      if(maxStopPips > 0.0 && slDistancePips > 0.0)
+         volFactor = slDistancePips / maxStopPips;
+      if(volFactor < 0.25) volFactor = 0.25; // avoid overly large lots
+
+      double adjustedRiskPct = riskPct / volFactor;
+      double riskAmt   = balance * adjustedRiskPct / 100.0;
 
       double point         = SymbolInfoDouble(symbol, SYMBOL_POINT);
       double tickValue     = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize      = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
       double contractSize  = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-      double pipSize       = SymbolPipSize(symbol);
 
       double slDistance = MathAbs(entryPrice - stopLoss);
       if(slDistance <= 0 || tickSize <= 0 || tickValue <= 0) return 0;
@@ -585,6 +601,8 @@ private:
       sig.confidence = _ExtDbl(json, "confidence_score");
 
       sig.createdAt  = ParseIsoDatetime(_ExtStr(json, "created_at"));
+      sig.validFrom  = ParseIsoDatetime(_ExtStr(json, "valid_from"));
+      sig.validTo    = ParseIsoDatetime(_ExtStr(json, "valid_to"));
       sig.expiresAt  = ParseIsoDatetime(_ExtStr(json, "expires_at"));
       sig.timestamp  = ParseIsoDatetime(_ExtStr(json, "timestamp"));
 

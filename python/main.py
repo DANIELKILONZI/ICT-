@@ -23,7 +23,7 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from python.config import CONFIG, SYMBOLS, TIMEFRAMES
+from python.config import CONFIG, SYMBOLS, TIMEFRAMES, session_is_open
 from python.data_engine.data_store import get_ohlcv
 from python.integration.execution_feedback import ingest_pending as ingest_ea_feedback
 from python.ml.signal_filter import ml_evaluate
@@ -67,13 +67,9 @@ signal.signal(signal.SIGTERM, _shutdown)
 
 # ── Session filter ────────────────────────────────────────────────────────────
 
-def _in_trading_session() -> bool:
-    """Return True during London or New York trading sessions (UTC)."""
-    hours = CONFIG["risk"].get("trading_hours", {})
-    now_h = datetime.now(timezone.utc).hour
-    london = hours.get("london_open", 8) <= now_h < hours.get("london_close", 17)
-    ny = hours.get("ny_open", 13) <= now_h < hours.get("ny_close", 22)
-    return london or ny
+def _in_trading_session(symbol: str) -> bool:
+    """Return True when *symbol* is inside its configured UTC session."""
+    return session_is_open(symbol, now_utc=datetime.now(timezone.utc))
 
 
 # ── Stale signal cleanup ──────────────────────────────────────────────────────
@@ -122,10 +118,6 @@ def run_analysis_cycle() -> None:
     _cycle_counter += 1
     cycle_id = f"cycle-{_cycle_counter:06d}"
 
-    if not _in_trading_session():
-        logger.debug("Outside trading session – skipping analysis.")
-        return
-
     # ── Portfolio-level risk guards ────────────────────────────────────────
     if daily_loss_reached():
         logger.info("Daily loss limit reached – no new signals this cycle.")
@@ -144,6 +136,10 @@ def run_analysis_cycle() -> None:
 
     for symbol in SYMBOLS:
         try:
+            if not _in_trading_session(symbol):
+                logger.debug("%s: Outside configured trading session – skipping.", symbol)
+                continue
+
             # ── Per-symbol risk gate ───────────────────────────────────────
             if not allow_multiple and has_open_trade(symbol):
                 logger.debug("%s: Open trade exists – skipping.", symbol)

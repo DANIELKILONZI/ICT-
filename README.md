@@ -109,7 +109,7 @@ python -m python.main
 ```
 
 Behavior:
-- Enforces trading session windows (`risk.trading_hours`)
+- Enforces symbol-aware trading session windows (`risk.default_session` / `risk.sessions`, with `risk.trading_hours` as legacy fallback)
 - Applies portfolio guards:
   - `daily_loss_reached()`
   - `trades_today_count()`
@@ -143,6 +143,7 @@ Example: `signals/active/EURUSD.json`
 
 Key fields include:
 - identity/lifecycle: `signal_id`, `created_at`, `expires_at`, `status`
+- session window: `valid_from`, `valid_to`
 - execution: `symbol`, `direction`, `entry_type`, `entry_price`, `stop_loss`, `take_profit`
 - quality/context: `risk_reward`, `confidence_score`, `setup_type`, `reasons`
 - integrity metadata: `payload_hash`

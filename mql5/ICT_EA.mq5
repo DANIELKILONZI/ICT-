@@ -21,6 +21,7 @@ input double   InpMaxDailyLoss    = 3.0;    // Max daily loss (%)
 input int      InpMaxTradesPerDay = 5;      // Max trades per day
 input double   InpMaxSpreadPips   = 3.0;    // Max allowed spread (pips)
 input double   InpMaxSlippagePips = 2.0;    // Max slippage (pips)
+input double   InpMaxStopPips     = 50.0;   // Baseline stop distance for dynamic sizing
 input int      InpLondonOpenHour  = 8;      // London session open (UTC)
 input int      InpLondonCloseHour = 17;     // London session close (UTC)
 input int      InpNYOpenHour      = 13;     // New York session open (UTC)
@@ -36,8 +37,10 @@ CTradeExecutor       g_executor;
 CBrokerGuard         g_guard;
 CTradeLogger         g_logger;
 
+#define MAX_RECENT_SIGNALS 10
 datetime        g_lastSignalTime  = 0;
-string          g_lastSignalId    = "";   // prevents re-executing the same signal
+string          g_recentSignalIds[MAX_RECENT_SIGNALS];
+int             g_recentSignalCount = 0;
 int             g_tradesToday     = 0;
 datetime        g_today           = 0;
 double          g_dailyStartEquity = 0;
@@ -126,10 +129,6 @@ void OnTick()
       g_dailyStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    }
 
-   // Check trading session
-   if(!IsInTradingSession())
-      return;
-
    // Check daily loss limit
    if(g_risk.IsDailyLossBreached(g_dailyStartEquity))
    {
@@ -183,7 +182,11 @@ void OnTick()
    }
 
    // Reject already-executed signal (deduplicate by signal_id)
-   if(signal.signalId != "" && signal.signalId == g_lastSignalId)
+   if(IsDuplicateSignal(signal.signalId))
+      return;
+
+   // Reject signal outside its explicit validity window (if provided)
+   if(!IsSignalInTradingSession(signal))
       return;
 
    // Validate signal timestamp to avoid re-trading (legacy fallback)
@@ -209,7 +212,8 @@ void OnTick()
       _Symbol,
       signal.entryPrice,
       signal.stopLoss,
-      InpRiskPercent
+      signal.riskPercent > 0 ? signal.riskPercent : InpRiskPercent,
+      InpMaxStopPips
    );
 
    if(lotSize <= 0)
@@ -255,7 +259,7 @@ void OnTick()
    if(executed)
    {
       g_lastSignalTime = signal.timestamp;
-      g_lastSignalId   = signal.signalId;
+      RememberSignalId(signal.signalId);
       g_tradesToday++;
       g_logger.LogTrade(signal, lotSize);
       // Write execution feedback so Python can reconcile Layer 3
@@ -277,14 +281,41 @@ void OnTick()
 //+------------------------------------------------------------------+
 //| Check if current time is within allowed trading sessions (UTC)   |
 //+------------------------------------------------------------------+
-bool IsInTradingSession()
+bool IsSignalInTradingSession(const STradeSignal &signal)
 {
-   MqlDateTime dt;
-   TimeToStruct(TimeGMT(), dt);
-   int h = dt.hour;
-   bool london = (h >= InpLondonOpenHour && h < InpLondonCloseHour);
-   bool ny     = (h >= InpNYOpenHour     && h < InpNYCloseHour);
-   return london || ny;
+   datetime now = TimeCurrent();
+   if(signal.validFrom > 0 && now < signal.validFrom)
+      return false;
+   if(signal.validTo > 0 && now > signal.validTo)
+      return false;
+   return true;
+}
+
+bool IsDuplicateSignal(const string signalId)
+{
+   if(signalId == "")
+      return false;
+   for(int i = 0; i < g_recentSignalCount; i++)
+   {
+      if(g_recentSignalIds[i] == signalId)
+         return true;
+   }
+   return false;
+}
+
+void RememberSignalId(const string signalId)
+{
+   if(signalId == "")
+      return;
+   if(g_recentSignalCount < MAX_RECENT_SIGNALS)
+   {
+      g_recentSignalIds[g_recentSignalCount] = signalId;
+      g_recentSignalCount++;
+      return;
+   }
+   for(int i = 1; i < MAX_RECENT_SIGNALS; i++)
+      g_recentSignalIds[i - 1] = g_recentSignalIds[i];
+   g_recentSignalIds[MAX_RECENT_SIGNALS - 1] = signalId;
 }
 
 //+------------------------------------------------------------------+
